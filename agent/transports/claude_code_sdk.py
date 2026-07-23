@@ -19,8 +19,14 @@ runtime is not selected.
 
 from __future__ import annotations
 
+import asyncio
+import queue
 import subprocess
-from typing import Optional
+import threading
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
+
+from tools.environments.local import hermes_subprocess_env
 
 # Floor chosen for stream-json + permission-hook + Task-tracking support in
 # the CLI's own protocol surface (verified locally against claude 2.1.217).
@@ -75,3 +81,151 @@ def check_claude_binary(
             f"npm i -g @anthropic-ai/claude-code"
         )
     return True, ".".join(map(str, version))
+
+
+@dataclass
+class ClaudeCodeSdkError(RuntimeError):
+    """Raised on claude-agent-sdk connection/protocol errors."""
+
+    message: str
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"claude code sdk error: {self.message}"
+
+
+class ClaudeCodeSdkClient:
+    """Synchronous facade over claude_agent_sdk.ClaudeSDKClient.
+
+    Threading model: a single background thread runs its own asyncio event
+    loop and owns the actual ClaudeSDKClient instance. The calling thread
+    (AIAgent.run_conversation(), synchronous) never touches asyncio
+    directly — it calls start()/send_turn()/take_event()/interrupt()/
+    close(), all plain blocking calls. Mirrors CodexAppServerClient's
+    blocking-queue-with-timeout facade (agent/transports/codex_app_server.py)
+    even though the underlying wire mechanics are completely different
+    (real asyncio SDK vs. hand-rolled JSON-RPC).
+    """
+
+    def __init__(
+        self,
+        claude_bin: str = "claude",
+        claude_config_dir: Optional[str] = None,
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+        can_use_tool: Optional[Callable[..., Any]] = None,
+        client_factory: Optional[Callable[[Any], Any]] = None,
+    ) -> None:
+        self._claude_bin = claude_bin
+        self._claude_config_dir = claude_config_dir
+        self._cwd = cwd
+        self._extra_env = env
+        self._can_use_tool = can_use_tool
+        self._client_factory = client_factory
+
+        self._events: "queue.Queue[dict]" = queue.Queue()
+        self._closed = False
+        self._started = threading.Event()
+        self._start_error: Optional[BaseException] = None
+
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client: Optional[Any] = None
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread_started = False
+
+    # ---------- lifecycle ----------
+
+    def start(self, timeout: float = 15.0) -> None:
+        """Start the background thread + event loop and connect the SDK
+        client. Idempotent — repeated calls are no-ops once started."""
+        if self._thread_started:
+            return
+        self._thread_started = True
+        self._thread.start()
+        if not self._started.wait(timeout=timeout):
+            raise ClaudeCodeSdkError(
+                "claude code sdk client failed to start in time"
+            )
+        if self._start_error is not None:
+            raise ClaudeCodeSdkError(str(self._start_error))
+
+    def is_alive(self) -> bool:
+        return self._thread.is_alive() and not self._closed
+
+    def close(self, timeout: float = 3.0) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._loop is not None and self._client is not None:
+
+            async def _disconnect() -> None:
+                await self._client.disconnect()
+
+            try:
+                fut = asyncio.run_coroutine_threadsafe(_disconnect(), self._loop)
+                fut.result(timeout=timeout)
+            except Exception:
+                pass
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=timeout)
+
+    def __enter__(self) -> "ClaudeCodeSdkClient":
+        self.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    # ---------- internals ----------
+
+    def _run_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._async_main())
+        except BaseException as exc:  # pragma: no cover - defensive
+            if not self._started.is_set():
+                self._start_error = exc
+                self._started.set()
+        finally:
+            loop.close()
+
+    async def _async_main(self) -> None:
+        factory = self._client_factory
+        if factory is None:
+            from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+
+            spawn_env = hermes_subprocess_env(inherit_credentials=True)
+            if self._extra_env:
+                spawn_env.update(self._extra_env)
+            if self._claude_config_dir:
+                spawn_env["CLAUDE_CONFIG_DIR"] = self._claude_config_dir
+            options = ClaudeAgentOptions(
+                cwd=self._cwd,
+                cli_path=self._claude_bin,
+                env=spawn_env,
+                include_partial_messages=True,
+                can_use_tool=self._can_use_tool,
+            )
+            self._client = ClaudeSDKClient(options=options)
+        else:
+            self._client = factory(None)
+
+        try:
+            await self._client.connect()
+        except BaseException as exc:
+            self._start_error = exc
+            self._started.set()
+            return
+        self._started.set()
+
+        try:
+            async for message in self._client.receive_messages():
+                if self._closed:
+                    break
+                self._events.put({"_raw": message})
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            pass
+        except BaseException as exc:  # pragma: no cover - defensive
+            self._events.put({"type": "transport_error", "error": str(exc)})
