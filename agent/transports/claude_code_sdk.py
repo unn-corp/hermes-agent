@@ -155,7 +155,7 @@ class ClaudeCodeSdkClient:
         if self._closed:
             return
         self._closed = True
-        if self._loop is not None and self._client is not None:
+        if self._loop is not None and not self._loop.is_closed() and self._client is not None:
 
             async def _disconnect() -> None:
                 await self._client.disconnect()
@@ -165,9 +165,16 @@ class ClaudeCodeSdkClient:
                 fut.result(timeout=timeout)
             except Exception:
                 pass
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=timeout)
+        if self._loop is not None and not self._loop.is_closed():
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                # Loop closed between the check above and this call (e.g.
+                # _async_main() exited and _run_loop()'s finally already
+                # tore it down) — nothing left to stop.
+                pass
+        if self._thread_started:
+            self._thread.join(timeout=timeout)
 
     def __enter__(self) -> "ClaudeCodeSdkClient":
         self.start()

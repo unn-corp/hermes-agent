@@ -74,3 +74,25 @@ def test_context_manager_starts_and_closes():
         assert client.is_alive() is True
         time.sleep(0.05)
     assert fake_holder["client"].disconnected is True
+
+
+def test_close_after_failed_start_does_not_raise():
+    """Regression: when _async_main() exits early because connect() raises,
+    _run_loop()'s finally already closed the event loop. close() must not
+    blow up trying to stop an already-closed loop."""
+    client = ClaudeCodeSdkClient(
+        client_factory=lambda options: _FailingFakeSdkClient(options)
+    )
+    with pytest.raises(ClaudeCodeSdkError):
+        client.start(timeout=5.0)
+
+    client.close(timeout=3.0)  # must not raise RuntimeError: Event loop is closed
+
+
+def test_close_without_start_does_not_raise():
+    """Regression: close() on a client whose start() was never invoked must
+    not try to join a thread that was never started."""
+    client = ClaudeCodeSdkClient(client_factory=lambda options: _FakeSdkClient(options))
+
+    client.close(timeout=1.0)  # must not raise RuntimeError: cannot join thread ...
+    assert client.is_alive() is False
