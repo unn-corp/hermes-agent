@@ -75,7 +75,7 @@ own thread — it never leaks upward.
 (alongside `anthropic = ["anthropic==0.87.0"]`) gets a new pinned extra:
 
 ```toml
-claude-code = ["claude-agent-sdk==X.Y.Z"]
+claude-code = ["claude-agent-sdk==0.2.126"]
 ```
 
 Import it lazily inside the module, not at top level, so users who never
@@ -243,7 +243,9 @@ from `_resolve_runtime_from_pool_entry`'s Anthropic-adjacent branch (~line
 
 - add `"claude_code_sdk"` to `_VALID_API_MODES`
 - add `_maybe_apply_claude_code_sdk_runtime()`, gated on `provider ==
-  "anthropic"` and a new config key
+  "anthropic"` AND a new `model.anthropic_runtime == "claude_code_sdk"` config
+  key — the direct sibling of `model.openai_runtime == "codex_app_server"`,
+  same location in `config.yaml`, same on/off semantics
 
 ## 4. `agent/cli_accounts.py` (new, shared across both providers) + transcript persistence
 
