@@ -1,4 +1,5 @@
 .DS_Store
+.worktrees/
 /venv/
 /venv.old/
 /_pycache/
