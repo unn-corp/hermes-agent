@@ -96,7 +96,7 @@ def test_min_claude_version_is_two_zero_zero():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_binary.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_binary.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent.transports.claude_code_sdk'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -184,7 +184,7 @@ def check_claude_binary(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_binary.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_binary.py -v`
 Expected: PASS (6 tests)
 
 - [ ] **Step 5: Add the dependency to pyproject.toml**
@@ -303,7 +303,7 @@ def test_context_manager_starts_and_closes():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_client_lifecycle.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_client_lifecycle.py -v`
 Expected: FAIL with `ImportError: cannot import name 'ClaudeCodeSdkClient'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -470,7 +470,7 @@ class ClaudeCodeSdkClient:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_client_lifecycle.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_client_lifecycle.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Commit**
@@ -578,7 +578,7 @@ def test_interrupt_calls_sdk_interrupt():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
 Expected: FAIL with `AttributeError: 'ClaudeCodeSdkClient' object has no attribute 'send_turn'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -635,12 +635,12 @@ Add to the `ClaudeCodeSdkClient` class in `hermes-agent/agent/transports/claude_
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
 Expected: PASS (3 tests)
 
 - [ ] **Step 5: Run the full transport test suite so far**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_binary.py tests/agent/transports/test_claude_code_sdk_client_lifecycle.py tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_binary.py tests/agent/transports/test_claude_code_sdk_client_lifecycle.py tests/agent/transports/test_claude_code_sdk_client_turns.py -v`
 Expected: PASS (13 tests total)
 
 - [ ] **Step 6: Commit**
@@ -695,7 +695,7 @@ def test_claude_code_sdk_api_mode_is_accepted():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_agent_init_api_mode.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_agent_init_api_mode.py -v`
 Expected: FAIL — `agent.api_mode` falls through to a different branch (not `"claude_code_sdk"`) because the set at `agent_init.py:581` doesn't include it yet.
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -714,7 +714,7 @@ to:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_agent_init_api_mode.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_agent_init_api_mode.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Write the failing test for `runtime_provider.py`**
@@ -765,7 +765,7 @@ def test_maybe_apply_claude_code_sdk_runtime_handles_none_config():
 
 - [ ] **Step 6: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_runtime_provider_claude_code_sdk.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_runtime_provider_claude_code_sdk.py -v`
 Expected: FAIL with `ImportError: cannot import name '_maybe_apply_claude_code_sdk_runtime'`
 
 - [ ] **Step 7: Write the minimal implementation**
@@ -823,7 +823,7 @@ def _maybe_apply_claude_code_sdk_runtime(
 
 - [ ] **Step 8: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_runtime_provider_claude_code_sdk.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_runtime_provider_claude_code_sdk.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 9: Wire the new rewrite function into `_resolve_runtime_from_pool_entry`**
@@ -893,7 +893,7 @@ def test_resolve_runtime_keeps_anthropic_messages_when_runtime_unset():
 
 - [ ] **Step 11: Run the full test file and confirm no regressions**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_runtime_provider_claude_code_sdk.py tests/agent/test_agent_init_api_mode.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_runtime_provider_claude_code_sdk.py tests/agent/test_agent_init_api_mode.py -v`
 Expected: PASS (6 tests total)
 
 - [ ] **Step 12: Commit**
@@ -989,7 +989,7 @@ def test_run_claude_code_sdk_turn_reuses_existing_session():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_dispatch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_dispatch.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent.claude_code_runtime'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1102,7 +1102,7 @@ __all__ = ["run_claude_code_sdk_turn"]
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_dispatch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_dispatch.py -v`
 Expected: PASS (2 tests)
 
 - [ ] **Step 5: Wire the `conversation_loop.py` dispatch**
@@ -1183,7 +1183,7 @@ def test_aiagent_forwarder_delegates_to_run_claude_code_sdk_turn(monkeypatch):
     assert called["kwargs"]["user_message"] == "hi"
 ```
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_dispatch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_dispatch.py -v`
 Expected: PASS (3 tests)
 
 - [ ] **Step 8: Commit**
@@ -1299,7 +1299,7 @@ def test_bridge_never_raises_on_callback_exception():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_event_bridge.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_event_bridge.py -v`
 Expected: FAIL with `ImportError: cannot import name 'make_claude_code_sdk_event_bridge'`
 
 - [ ] **Step 3: Write the minimal implementation of the event bridge**
@@ -1405,7 +1405,7 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_event_bridge.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_event_bridge.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Write the failing test for `ClaudeCodeSdkTurnSession`**
@@ -1450,7 +1450,7 @@ def test_run_turn_sends_input_and_collects_final_text():
 
 - [ ] **Step 6: Run test to verify it fails**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_session.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_session.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent.transports.claude_code_sdk_session'`
 
 - [ ] **Step 7: Write the minimal implementation**
@@ -1669,7 +1669,7 @@ def test_run_turn_marks_retire_on_transport_error():
 
 - [ ] **Step 9: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_session.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_session.py -v`
 Expected: PASS (2 tests)
 
 - [ ] **Step 10: Wire the session + event bridge into `run_claude_code_sdk_turn`'s default path**
@@ -1691,7 +1691,7 @@ Edit `hermes-agent/agent/claude_code_runtime.py`, replacing the `else` branch in
 
 - [ ] **Step 11: Run the full Task 5+6 test files together**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_dispatch.py tests/agent/test_claude_code_sdk_event_bridge.py tests/agent/transports/test_claude_code_sdk_session.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_dispatch.py tests/agent/test_claude_code_sdk_event_bridge.py tests/agent/transports/test_claude_code_sdk_session.py -v`
 Expected: PASS (9 tests total)
 
 - [ ] **Step 12: Commit**
@@ -1785,7 +1785,7 @@ def test_counts_api_call_even_when_result_message_is_none():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_usage.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_usage.py -v`
 Expected: FAIL with `ImportError: cannot import name '_record_claude_code_sdk_usage'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1928,7 +1928,7 @@ def _record_claude_code_sdk_usage(agent, turn) -> dict[str, Any]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_usage.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_usage.py -v`
 Expected: PASS (2 tests)
 
 - [ ] **Step 5: Wire usage recording into `run_claude_code_sdk_turn`**
@@ -1953,7 +1953,7 @@ Edit `run_claude_code_sdk_turn` in `hermes-agent/agent/claude_code_runtime.py`: 
 
 - [ ] **Step 6: Run the full runtime test file to confirm no regressions**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_dispatch.py tests/agent/test_claude_code_sdk_event_bridge.py tests/agent/test_claude_code_sdk_usage.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_dispatch.py tests/agent/test_claude_code_sdk_event_bridge.py tests/agent/test_claude_code_sdk_usage.py -v`
 Expected: PASS (11 tests total)
 
 - [ ] **Step 7: Commit**
@@ -2023,7 +2023,7 @@ def test_approval_callback_auto_allows_when_bypass_active():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_approval.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_approval.py -v`
 Expected: FAIL with `ImportError: cannot import name '_make_claude_code_approval_callback'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -2092,7 +2092,7 @@ def _make_claude_code_approval_callback(agent):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_sdk_approval.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_sdk_approval.py -v`
 Expected: PASS (3 tests)
 
 - [ ] **Step 5: Thread the callback into `run_claude_code_sdk_turn`'s session construction**
@@ -2115,14 +2115,14 @@ Edit `hermes-agent/agent/claude_code_runtime.py`'s lazy-init block (from Task 6,
 
 - [ ] **Step 6: Confirm `ClaudeCodeSdkTurnSession` already threads `can_use_tool` through**
 
-Verify (no code change expected — `ClaudeCodeSdkTurnSession.__init__` from Task 6 already accepts and forwards `can_use_tool` to its `client_factory` call in `ensure_started()`): re-run `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_session.py -v` and confirm it still passes unmodified.
+Verify (no code change expected — `ClaudeCodeSdkTurnSession.__init__` from Task 6 already accepts and forwards `can_use_tool` to its `client_factory` call in `ensure_started()`): re-run `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_session.py -v` and confirm it still passes unmodified.
 
 - [ ] **Step 7: Run the complete Phase 1 test suite**
 
 Run:
 ```bash
 cd hermes-agent
-python -m pytest \
+./scripts/run_tests.sh \
   tests/agent/transports/test_claude_code_sdk_binary.py \
   tests/agent/transports/test_claude_code_sdk_client_lifecycle.py \
   tests/agent/transports/test_claude_code_sdk_client_turns.py \
