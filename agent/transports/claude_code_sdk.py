@@ -201,6 +201,52 @@ class ClaudeCodeSdkClient:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    # ---------- send/receive ----------
+
+    def send_turn(self, user_input: str, *, session_id: str = "default") -> None:
+        """Send a user message. Non-blocking on the SDK's own response —
+        the reply streams in as events consumed via take_event()."""
+        if self._loop is None or self._client is None:
+            raise ClaudeCodeSdkError("client not started")
+
+        async def _query() -> None:
+            await self._client.query(user_input, session_id=session_id)
+
+        fut = asyncio.run_coroutine_threadsafe(_query(), self._loop)
+        fut.result(timeout=10.0)
+
+    def take_event(self, timeout: float = 0.0) -> Optional[dict]:
+        """Pop the next streamed event, or return None on timeout.
+
+        timeout=0.0 means non-blocking. Use small positive timeouts inside
+        the turn loop to interleave reads with interrupt checks, mirroring
+        CodexAppServerClient.take_notification()."""
+        try:
+            if timeout <= 0:
+                raw = self._events.get_nowait()
+            else:
+                raw = self._events.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if "_raw" in raw:
+            return {"type": "raw_message", "message": raw["_raw"]}
+        return raw
+
+    def interrupt(self) -> None:
+        """Ask the SDK to interrupt the in-flight turn. Best-effort — safe
+        to call when nothing is in flight."""
+        if self._loop is None or self._client is None:
+            return
+
+        async def _interrupt() -> None:
+            await self._client.interrupt()
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_interrupt(), self._loop)
+            fut.result(timeout=5.0)
+        except Exception:
+            pass
+
     # ---------- internals ----------
 
     def _run_loop(self) -> None:
