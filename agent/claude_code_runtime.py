@@ -154,9 +154,20 @@ def _make_claude_code_approval_callback(agent):
     """Build a can_use_tool callback for ClaudeAgentOptions, bridging
     Claude Code's own tool-permission prompts through Hermes' existing
     approval flow instead of letting the CLI use its own independent
-    permission mode. Mirrors CodexAppServerSession._decide_exec_approval /
-    _decide_apply_patch_approval's use of tools.approval.
-    prompt_dangerous_approval and tools.approval.is_approval_bypass_active.
+    permission mode.
+
+    Routes through the CLI-registered approval_callback
+    (tools.terminal_tool._get_approval_callback) when one is wired up. When
+    no callback is registered, this falls back to
+    tools.approval.prompt_dangerous_approval — a CLI-oriented prompt (per
+    its own docstring), unlike CodexAppServerSession._decide_exec_approval /
+    _decide_apply_patch_approval, which fail closed to "decline" outright
+    when no approval_callback is present (gateway/cron contexts have no UI
+    to surface an approval request through; see agent.codex_runtime's
+    comment on that deliberate fail-closed default). This fallback path has
+    not yet been adapted for non-CLI (gateway/cron) contexts — a known
+    follow-up, not a security gap, since prompt_dangerous_approval still
+    resolves to deny on any error or timeout.
     """
 
     async def can_use_tool(tool_name, tool_input, context):
