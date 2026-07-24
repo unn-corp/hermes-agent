@@ -357,6 +357,12 @@ _VALID_API_MODES = {
     # `model.openai_runtime == "codex_app_server"` AND provider in
     # {"openai", "openai-codex"}. Default is unchanged.
     "codex_app_server",
+    # Optional opt-in: hand the entire turn to the real `claude` CLI via
+    # claude-agent-sdk, using the CLI's own subscription/OAuth auth instead
+    # of a raw Anthropic API key. Gated behind config key
+    # `model.anthropic_runtime == "claude_code_sdk"` AND provider ==
+    # "anthropic". Default is unchanged.
+    "claude_code_sdk",
 }
 
 
@@ -403,6 +409,31 @@ def _maybe_apply_codex_app_server_runtime(
     runtime = str(model_cfg.get("openai_runtime") or "").strip().lower()
     if runtime == "codex_app_server":
         return "codex_app_server"
+    return api_mode
+
+
+def _maybe_apply_claude_code_sdk_runtime(
+    *,
+    provider: str,
+    api_mode: str,
+    model_cfg: Optional[Dict[str, Any]],
+) -> str:
+    """Optional opt-in: rewrite api_mode -> "claude_code_sdk" for the
+    Anthropic provider when the user has explicitly enabled that runtime via
+    `model.anthropic_runtime: claude_code_sdk` in config.yaml.
+
+    Direct sibling of _maybe_apply_codex_app_server_runtime — same location
+    in config.yaml, same on/off semantics, same no-op-by-default contract.
+    Only provider == "anthropic" is eligible.
+
+    Returns the (possibly-rewritten) api_mode."""
+    if not model_cfg:
+        return api_mode
+    if provider != "anthropic":
+        return api_mode
+    runtime = str(model_cfg.get("anthropic_runtime") or "").strip().lower()
+    if runtime == "claude_code_sdk":
+        return "claude_code_sdk"
     return api_mode
 
 
@@ -536,6 +567,12 @@ def _resolve_runtime_from_pool_entry(
     # Optional opt-in: route OpenAI/Codex turns through `codex app-server`.
     # Inert when `model.openai_runtime` is unset or "auto".
     api_mode = _maybe_apply_codex_app_server_runtime(
+        provider=provider, api_mode=api_mode, model_cfg=model_cfg
+    )
+
+    # Optional opt-in: route Anthropic turns through the real `claude` CLI.
+    # Inert when `model.anthropic_runtime` is unset or "auto".
+    api_mode = _maybe_apply_claude_code_sdk_runtime(
         provider=provider, api_mode=api_mode, model_cfg=model_cfg
     )
 
