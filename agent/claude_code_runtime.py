@@ -4,10 +4,9 @@ Each function takes the parent AIAgent as its first argument (agent).
 AIAgent keeps a thin forwarder method (_run_claude_code_sdk_turn) for
 consistency with the Codex app-server pattern.
 
-Status: this task wires the lazy session lifecycle, dispatch path, and
-event bridging (make_claude_code_sdk_event_bridge, defined below).
-Usage recording (_record_claude_code_sdk_usage) lands in a follow-up task
-in this same plan.
+Includes the lazy session lifecycle, dispatch path, event bridging
+(make_claude_code_sdk_event_bridge), and usage recording
+(_record_claude_code_sdk_usage).
 """
 
 from __future__ import annotations
@@ -16,6 +15,139 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_usage_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    if isinstance(value, float):
+        return max(int(value), 0)
+    return 0
+
+
+def _record_claude_code_sdk_usage(agent, turn) -> dict[str, Any]:
+    """Translate claude-agent-sdk ResultMessage usage into Hermes
+    accounting. Mirrors agent.codex_runtime._record_codex_app_server_usage
+    field-for-field, with one deliberate difference: Claude's usage block
+    DOES report cache-write tokens (cacheCreationInputTokens), unlike Codex
+    app-server, so cache_write_tokens is populated here instead of zeroed.
+
+    Even when there's no result_message for a turn (e.g. it errored before
+    a ResultMessage arrived), Hermes still counts the turn as one API call
+    for session/status accounting.
+    """
+    agent.session_api_calls += 1
+
+    result_message = getattr(turn, "result_message", None)
+    usage = getattr(result_message, "usage", None) if result_message else None
+    if not isinstance(usage, dict) or not usage:
+        if agent._session_db and agent.session_id:
+            try:
+                if not agent._session_db_created:
+                    agent._ensure_db_session()
+                agent._session_db.update_token_counts(
+                    agent.session_id,
+                    model=agent.model,
+                    billing_provider=agent.provider,
+                    billing_base_url=agent.base_url,
+                    billing_mode="subscription_included",
+                    api_call_count=1,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Claude code sdk api-call persistence failed (session=%s): %s",
+                    agent.session_id, exc,
+                )
+        return {}
+
+    from agent.usage_pricing import CanonicalUsage, estimate_usage_cost
+
+    input_tokens = _coerce_usage_int(usage.get("inputTokens"))
+    cache_read_tokens = _coerce_usage_int(usage.get("cacheReadInputTokens"))
+    cache_write_tokens = _coerce_usage_int(usage.get("cacheCreationInputTokens"))
+    output_tokens = _coerce_usage_int(usage.get("outputTokens"))
+
+    canonical_usage = CanonicalUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=0,
+        raw_usage=usage,
+    )
+    prompt_tokens = canonical_usage.prompt_tokens
+    completion_tokens = canonical_usage.output_tokens
+    total_tokens = canonical_usage.total_tokens
+    usage_dict = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "input_tokens": canonical_usage.input_tokens,
+        "output_tokens": canonical_usage.output_tokens,
+        "cache_read_tokens": canonical_usage.cache_read_tokens,
+        "cache_write_tokens": canonical_usage.cache_write_tokens,
+        "reasoning_tokens": canonical_usage.reasoning_tokens,
+    }
+
+    agent.session_prompt_tokens += prompt_tokens
+    agent.session_completion_tokens += completion_tokens
+    agent.session_total_tokens += total_tokens
+    agent.session_input_tokens += canonical_usage.input_tokens
+    agent.session_output_tokens += canonical_usage.output_tokens
+    agent.session_cache_read_tokens += canonical_usage.cache_read_tokens
+    agent.session_cache_write_tokens += canonical_usage.cache_write_tokens
+    agent.session_reasoning_tokens += canonical_usage.reasoning_tokens
+
+    cost_result = estimate_usage_cost(
+        agent.model,
+        canonical_usage,
+        provider=agent.provider,
+        base_url=agent.base_url,
+        api_key=getattr(agent, "api_key", ""),
+    )
+    if cost_result.amount_usd is not None:
+        agent.session_estimated_cost_usd += float(cost_result.amount_usd)
+    agent.session_cost_status = cost_result.status
+    agent.session_cost_source = cost_result.source
+
+    if agent._session_db and agent.session_id:
+        try:
+            if not agent._session_db_created:
+                agent._ensure_db_session()
+            agent._session_db.update_token_counts(
+                agent.session_id,
+                input_tokens=canonical_usage.input_tokens,
+                output_tokens=canonical_usage.output_tokens,
+                cache_read_tokens=canonical_usage.cache_read_tokens,
+                cache_write_tokens=canonical_usage.cache_write_tokens,
+                reasoning_tokens=canonical_usage.reasoning_tokens,
+                estimated_cost_usd=float(cost_result.amount_usd)
+                if cost_result.amount_usd is not None else None,
+                cost_status=cost_result.status,
+                cost_source=cost_result.source,
+                billing_provider=agent.provider,
+                billing_base_url=agent.base_url,
+                billing_mode="subscription_included"
+                if cost_result.status == "included" else None,
+                model=agent.model,
+                api_call_count=1,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Claude code sdk token persistence failed (session=%s, tokens=%d): %s",
+                agent.session_id, total_tokens, exc,
+            )
+
+    return {
+        **usage_dict,
+        "last_prompt_tokens": prompt_tokens,
+        "estimated_cost_usd": float(cost_result.amount_usd)
+        if cost_result.amount_usd is not None else None,
+        "cost_status": cost_result.status,
+        "cost_source": cost_result.source,
+    }
 
 
 def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
@@ -245,6 +377,8 @@ def run_claude_code_sdk_turn(
     if _user_interrupted:
         agent.clear_interrupt()
 
+    usage_result = _record_claude_code_sdk_usage(agent, turn)
+
     return {
         "final_response": turn.final_text,
         "messages": messages,
@@ -259,6 +393,7 @@ def run_claude_code_sdk_turn(
         ),
         "error": turn.error,
         "agent_persisted": False,
+        **usage_result,
     }
 
 
