@@ -150,6 +150,65 @@ def _record_claude_code_sdk_usage(agent, turn) -> dict[str, Any]:
     }
 
 
+def _make_claude_code_approval_callback(agent):
+    """Build a can_use_tool callback for ClaudeAgentOptions, bridging
+    Claude Code's own tool-permission prompts through Hermes' existing
+    approval flow instead of letting the CLI use its own independent
+    permission mode. Mirrors CodexAppServerSession._decide_exec_approval /
+    _decide_apply_patch_approval's use of tools.approval.
+    prompt_dangerous_approval and tools.approval.is_approval_bypass_active.
+    """
+
+    async def can_use_tool(tool_name, tool_input, context):
+        from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+        from tools.approval import is_approval_bypass_active, prompt_dangerous_approval
+        from tools.terminal_tool import _get_approval_callback
+
+        try:
+            if is_approval_bypass_active():
+                return PermissionResultAllow(behavior="allow")
+        except Exception:
+            logger.debug(
+                "claude code sdk: approval-bypass lookup failed; "
+                "keeping fail-closed default",
+                exc_info=True,
+            )
+
+        command = (
+            tool_input.get("command")
+            if isinstance(tool_input, dict)
+            else None
+        ) or tool_name
+        description = f"Claude Code requests to use {tool_name}"
+
+        approval_callback = None
+        try:
+            approval_callback = _get_approval_callback()
+        except Exception:
+            approval_callback = None
+
+        try:
+            if approval_callback is not None:
+                choice = approval_callback(command, description, allow_permanent=False)
+            else:
+                choice = prompt_dangerous_approval(
+                    command, description, allow_permanent=False
+                )
+        except Exception:
+            logger.exception("claude code sdk approval callback raised")
+            return PermissionResultDeny(
+                behavior="deny", message="approval callback raised", interrupt=False
+            )
+
+        if choice in {"once", "session", "always"}:
+            return PermissionResultAllow(behavior="allow")
+        return PermissionResultDeny(
+            behavior="deny", message="user declined", interrupt=False
+        )
+
+    return can_use_tool
+
+
 def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     """Build an on_event callback wiring claude-agent-sdk messages into
     Hermes' gateway UI callbacks. Mirrors
@@ -309,6 +368,7 @@ def run_claude_code_sdk_turn(
             agent._claude_code_session = ClaudeCodeSdkTurnSession(
                 cwd=cwd,
                 on_event=make_claude_code_sdk_event_bridge(agent),
+                can_use_tool=_make_claude_code_approval_callback(agent),
             )
 
     try:
