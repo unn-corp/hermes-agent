@@ -11,6 +11,7 @@ mechanics underneath (SDK message objects instead of JSON-RPC dicts).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,20 @@ from typing import Any, Callable, Optional
 from agent.transports.claude_code_sdk import ClaudeCodeSdkClient
 
 logger = logging.getLogger(__name__)
+
+
+def _stringify_tool_result_content(content: Any) -> Any:
+    """Stringify a ToolResultBlock's content the same way
+    agent.claude_code_runtime.make_claude_code_sdk_event_bridge's
+    _fire_tool_completed already does, so the projected `role: "tool"`
+    message and the display-bridge's reported result never drift apart.
+    """
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text", part)) if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    return content
 
 
 @dataclass
@@ -123,13 +138,44 @@ class ClaudeCodeSdkTurnSession:
             type_name = type(message).__name__
             if type_name == "AssistantMessage":
                 for block in getattr(message, "content", []) or []:
-                    if type(block).__name__ == "TextBlock":
+                    block_type = type(block).__name__
+                    if block_type == "TextBlock":
                         text_parts.append(getattr(block, "text", ""))
-                    elif type(block).__name__ == "ToolResultBlock":
+                    elif block_type == "ToolUseBlock":
+                        result.projected_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": block.id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": block.name,
+                                            "arguments": json.dumps(block.input),
+                                        },
+                                    }
+                                ],
+                            }
+                        )
+                    elif block_type == "ToolResultBlock":
                         result.tool_iterations += 1
+                        result.projected_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": block.tool_use_id,
+                                "content": _stringify_tool_result_content(
+                                    block.content
+                                ),
+                            }
+                        )
             elif type_name == "ResultMessage":
                 result.result_message = message
                 result.final_text = "".join(text_parts)
+                if result.final_text:
+                    result.projected_messages.append(
+                        {"role": "assistant", "content": result.final_text}
+                    )
                 break
 
         else:

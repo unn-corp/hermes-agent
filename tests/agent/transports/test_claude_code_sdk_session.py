@@ -113,3 +113,112 @@ def test_run_turn_counts_one_tool_iteration_per_completed_tool_call():
 
     assert result.tool_iterations == 1
     assert result.final_text == "done"
+
+
+def test_run_turn_projects_tool_call_then_result_then_final_text():
+    """The projected_messages list is what run_claude_code_sdk_turn()
+    splices into Hermes' own messages list (agent/claude_code_runtime.py's
+    messages.extend(turn.projected_messages)) — this is what actually
+    persists the assistant's turn to Hermes' session DB / transcript.
+    Regression test for a bug where projected_messages was declared on
+    TurnResult but never populated, so every assistant turn silently
+    vanished from Hermes' own history despite streaming fine to the user."""
+    fake_client = MagicMock()
+    fake_client.is_alive.return_value = True
+    events = [
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[ToolUseBlock("tool-1", name="Bash", input={"command": "ls"})]
+        )},
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[ToolResultBlock("tool-1", content="ok")]
+        )},
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[TextBlock("echo: hello")]
+        )},
+        {"type": "raw_message", "message": ResultMessage()},
+    ]
+    fake_client.take_event.side_effect = lambda timeout=0.0: (
+        events.pop(0) if events else None
+    )
+
+    session = ClaudeCodeSdkTurnSession(client_factory=lambda **kw: fake_client)
+    result = session.run_turn(user_input="hello", turn_timeout=2.0)
+
+    assert result.projected_messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tool-1",
+                    "type": "function",
+                    "function": {
+                        "name": "Bash",
+                        "arguments": '{"command": "ls"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tool-1", "content": "ok"},
+        {"role": "assistant", "content": "echo: hello"},
+    ]
+
+
+def test_run_turn_projects_list_content_tool_results_using_bridge_logic():
+    """ToolResultBlock.content can be a list of dict parts (matching the
+    real claude-agent-sdk shape) — the stringification must match
+    agent.claude_code_runtime's _fire_tool_completed exactly, joining parts
+    by `.get("text", part)`, not a subtly different re-implementation."""
+    fake_client = MagicMock()
+    fake_client.is_alive.return_value = True
+    events = [
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[ToolUseBlock("tool-1", name="Read", input={"path": "f"})]
+        )},
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[ToolResultBlock(
+                "tool-1",
+                content=[{"type": "text", "text": "line one"}, "line two"],
+            )]
+        )},
+        {"type": "raw_message", "message": ResultMessage()},
+    ]
+    fake_client.take_event.side_effect = lambda timeout=0.0: (
+        events.pop(0) if events else None
+    )
+
+    session = ClaudeCodeSdkTurnSession(client_factory=lambda **kw: fake_client)
+    result = session.run_turn(user_input="hello", turn_timeout=2.0)
+
+    tool_msg = result.projected_messages[1]
+    assert tool_msg == {
+        "role": "tool",
+        "tool_call_id": "tool-1",
+        "content": "line one\nline two",
+    }
+    # A tool-only turn (no final TextBlock) must NOT add a bogus empty
+    # trailing assistant message.
+    assert result.projected_messages[-1] == tool_msg
+
+
+def test_run_turn_text_only_turn_projects_single_final_assistant_message():
+    """A turn with no tool calls at all should produce projected_messages
+    containing exactly one entry: the final assistant text message."""
+    fake_client = MagicMock()
+    fake_client.is_alive.return_value = True
+    events = [
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[TextBlock("just a text reply")]
+        )},
+        {"type": "raw_message", "message": ResultMessage()},
+    ]
+    fake_client.take_event.side_effect = lambda timeout=0.0: (
+        events.pop(0) if events else None
+    )
+
+    session = ClaudeCodeSdkTurnSession(client_factory=lambda **kw: fake_client)
+    result = session.run_turn(user_input="hello", turn_timeout=2.0)
+
+    assert result.projected_messages == [
+        {"role": "assistant", "content": "just a text reply"}
+    ]
