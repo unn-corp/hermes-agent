@@ -1217,26 +1217,34 @@ from unittest.mock import MagicMock
 from agent.claude_code_runtime import make_claude_code_sdk_event_bridge
 
 
-class _FakeToolUseBlock:
+class ToolUseBlock:
+    """Named to match claude_agent_sdk.types.ToolUseBlock exactly — the
+    bridge's dispatch keys off type(block).__name__ as a plain string (see
+    Step 3's on_event()), specifically so this module never needs to import
+    the real SDK types at module scope. A fake class named e.g.
+    `_FakeToolUseBlock` would silently defeat that dispatch in tests (its
+    __name__ would never equal "ToolUseBlock"), so these test doubles use
+    the real SDK class names verbatim instead of a `_Fake`-prefixed alias."""
+
     def __init__(self, id, name, input):
         self.id = id
         self.name = name
         self.input = input
 
 
-class _FakeToolResultBlock:
+class ToolResultBlock:
     def __init__(self, tool_use_id, content, is_error=False):
         self.tool_use_id = tool_use_id
         self.content = content
         self.is_error = is_error
 
 
-class _FakeTextBlock:
+class TextBlock:
     def __init__(self, text):
         self.text = text
 
 
-class _FakeAssistantMessage:
+class AssistantMessage:
     def __init__(self, content):
         self.content = content
         self.parent_tool_use_id = None
@@ -1246,13 +1254,16 @@ def test_bridge_fires_tool_progress_for_tool_use_block():
     agent = MagicMock()
     bridge = make_claude_code_sdk_event_bridge(agent)
 
-    message = _FakeAssistantMessage(
-        content=[_FakeToolUseBlock(id="tu_1", name="Bash", input={"command": "ls"})]
+    message = AssistantMessage(
+        content=[ToolUseBlock(id="tu_1", name="Bash", input={"command": "ls"})]
     )
     bridge({"type": "raw_message", "message": message})
 
     agent.tool_progress_callback.assert_any_call(
         "tool.started", "Bash", "ls", {"command": "ls"}
+    )
+    agent.tool_start_callback.assert_any_call(
+        "tu_1", "Bash", {"command": "ls"}
     )
 
 
@@ -1260,13 +1271,13 @@ def test_bridge_fires_tool_completed_for_tool_result_block():
     agent = MagicMock()
     bridge = make_claude_code_sdk_event_bridge(agent)
 
-    started = _FakeAssistantMessage(
-        content=[_FakeToolUseBlock(id="tu_2", name="Read", input={"file_path": "/x"})]
+    started = AssistantMessage(
+        content=[ToolUseBlock(id="tu_2", name="Read", input={"file_path": "/x"})]
     )
     bridge({"type": "raw_message", "message": started})
 
-    completed = _FakeAssistantMessage(
-        content=[_FakeToolResultBlock(tool_use_id="tu_2", content="file contents", is_error=False)]
+    completed = AssistantMessage(
+        content=[ToolResultBlock(tool_use_id="tu_2", content="file contents", is_error=False)]
     )
     bridge({"type": "raw_message", "message": completed})
 
@@ -1274,13 +1285,16 @@ def test_bridge_fires_tool_completed_for_tool_result_block():
         "tool.completed", "Read", None, None,
         duration=None, is_error=False, result="file contents",
     )
+    agent.tool_complete_callback.assert_any_call(
+        "tu_2", "Read", {"file_path": "/x"}, "file contents",
+    )
 
 
 def test_bridge_fires_stream_delta_for_text_block():
     agent = MagicMock()
     bridge = make_claude_code_sdk_event_bridge(agent)
 
-    message = _FakeAssistantMessage(content=[_FakeTextBlock(text="hello there")])
+    message = AssistantMessage(content=[TextBlock(text="hello there")])
     bridge({"type": "raw_message", "message": message})
 
     agent._fire_stream_delta.assert_called_once_with("hello there")
@@ -1289,10 +1303,11 @@ def test_bridge_fires_stream_delta_for_text_block():
 def test_bridge_never_raises_on_callback_exception():
     agent = MagicMock()
     agent.tool_progress_callback.side_effect = RuntimeError("boom")
+    agent.tool_start_callback.side_effect = RuntimeError("boom")
     bridge = make_claude_code_sdk_event_bridge(agent)
 
-    message = _FakeAssistantMessage(
-        content=[_FakeToolUseBlock(id="tu_3", name="Bash", input={})]
+    message = AssistantMessage(
+        content=[ToolUseBlock(id="tu_3", name="Bash", input={})]
     )
     bridge({"type": "raw_message", "message": message})  # must not raise
 ```
@@ -1312,10 +1327,19 @@ Callable, Dict, List, Optional`):
 def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     """Build an on_event callback wiring claude-agent-sdk messages into
     Hermes' gateway UI callbacks. Mirrors
-    agent.codex_runtime.make_codex_app_server_event_bridge — same three
-    target callbacks (tool_progress_callback, _fire_stream_delta,
-    _emit_interim_assistant_message), different source message shapes
-    (SDK dataclasses instead of codex JSON-RPC dicts).
+    agent.codex_runtime.make_codex_app_server_event_bridge — same four
+    target callbacks (tool_progress_callback, tool_start_callback,
+    tool_complete_callback, _fire_stream_delta), different source message
+    shapes (SDK dataclasses instead of codex JSON-RPC dicts).
+
+    tool_start_callback/tool_complete_callback are fired alongside
+    tool_progress_callback, not instead of it — verified against
+    tui_gateway/server.py, where tool_progress_callback's "tool.started"
+    case is a no-op; tool_start_callback/tool_complete_callback are what
+    actually produce the visible, stable-ID tool card in the TUI/Desktop.
+    Firing only tool_progress_callback (as an earlier draft of this bridge
+    did) would pass unit tests asserting on tool_progress_callback alone
+    while never actually rendering anything in the real gateway.
 
     Scope note: this task handles ordinary AssistantMessage content blocks
     (TextBlock, ToolUseBlock, ToolResultBlock) only. TaskStartedMessage /
@@ -1328,7 +1352,8 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     """
     # tool_use_id -> (tool_name, args). Populated when a ToolUseBlock is
     # seen; consumed when the matching ToolResultBlock arrives, so the
-    # completed-bubble can report the tool name without re-deriving it.
+    # completed-bubble can report the tool name and original args without
+    # re-deriving them.
     started: dict[str, tuple[str, dict]] = {}
 
     def _fire_tool_started(block) -> None:
@@ -1351,10 +1376,23 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
                     "tool_progress_callback raised on tool.started for %s",
                     name, exc_info=True,
                 )
+        # Authoritative stable-ID tool card (TUI / Desktop). Claude's
+        # ToolUseBlock already carries a real unique id from the API, so
+        # unlike Codex's synthesized _deterministic_call_id, block.id can
+        # be used directly as the stable call id.
+        start_cb = getattr(agent, "tool_start_callback", None)
+        if start_cb is not None:
+            try:
+                start_cb(block.id, name, args)
+            except Exception:
+                logger.debug(
+                    "tool_start_callback raised for %s", name, exc_info=True,
+                )
 
     def _fire_tool_completed(block) -> None:
         prior = started.pop(block.tool_use_id, None)
         name = prior[0] if prior is not None else "unknown"
+        args = prior[1] if prior is not None else {}
         content = block.content
         if isinstance(content, list):
             content = "\n".join(
@@ -1371,6 +1409,14 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
                 logger.debug(
                     "tool_progress_callback raised on tool.completed for %s",
                     name, exc_info=True,
+                )
+        complete_cb = getattr(agent, "tool_complete_callback", None)
+        if complete_cb is not None:
+            try:
+                complete_cb(block.tool_use_id, name, args, content)
+            except Exception:
+                logger.debug(
+                    "tool_complete_callback raised for %s", name, exc_info=True,
                 )
 
     def _fire_text(text: str) -> None:
@@ -1611,17 +1657,22 @@ from unittest.mock import MagicMock
 from agent.transports.claude_code_sdk_session import ClaudeCodeSdkTurnSession
 
 
-class _FakeTextBlock:
+class TextBlock:
+    """Named to match claude_agent_sdk.types.TextBlock exactly —
+    run_turn()'s dispatch keys off type(x).__name__ as a plain string (see
+    Step 7's run_turn()), so a `_Fake`-prefixed class name would silently
+    never match and this test would exercise nothing."""
+
     def __init__(self, text):
         self.text = text
 
 
-class _FakeAssistantMessage:
+class AssistantMessage:
     def __init__(self, content):
         self.content = content
 
 
-class _FakeResultMessage:
+class ResultMessage:
     def __init__(self):
         self.usage = {"inputTokens": 10, "outputTokens": 5}
         self.model_usage = None
@@ -1633,10 +1684,10 @@ def test_run_turn_sends_input_and_collects_final_text():
     fake_client = MagicMock()
     fake_client.is_alive.return_value = True
     events = [
-        {"type": "raw_message", "message": _FakeAssistantMessage(
-            content=[_FakeTextBlock("assembled final text")]
+        {"type": "raw_message", "message": AssistantMessage(
+            content=[TextBlock("assembled final text")]
         )},
-        {"type": "raw_message", "message": _FakeResultMessage()},
+        {"type": "raw_message", "message": ResultMessage()},
     ]
     fake_client.take_event.side_effect = lambda timeout=0.0: (
         events.pop(0) if events else None
