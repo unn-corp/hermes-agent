@@ -89,6 +89,34 @@ def test_close_after_failed_start_does_not_raise():
     client.close(timeout=3.0)  # must not raise RuntimeError: Event loop is closed
 
 
+def test_close_after_failed_start_returns_promptly():
+    """Regression for the TOCTOU race in close(): _async_main() sets
+    self._started (unblocking start(), which raises) before
+    run_until_complete() returns and _run_loop()'s `finally: loop.close()`
+    executes on the background thread. If close() used to land in that
+    window, self._loop.is_closed() was still False, so it would schedule a
+    disconnect coroutine via run_coroutine_threadsafe() that never runs
+    (the loop is no longer being pumped) and block for the full `timeout`
+    before giving up. close() must now skip the disconnect attempt
+    whenever start() never succeeded (self._start_error is not None), so
+    it returns near-instantly on every run, not just some."""
+    for _ in range(5):
+        client = ClaudeCodeSdkClient(
+            client_factory=lambda options: _FailingFakeSdkClient(options)
+        )
+        with pytest.raises(ClaudeCodeSdkError):
+            client.start(timeout=5.0)
+
+        start = time.monotonic()
+        client.close(timeout=3.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, (
+            f"close() took {elapsed:.3f}s after a failed start — the "
+            "disconnect-scheduling TOCTOU race is back"
+        )
+
+
 def test_close_without_start_does_not_raise():
     """Regression: close() on a client whose start() was never invoked must
     not try to join a thread that was never started."""

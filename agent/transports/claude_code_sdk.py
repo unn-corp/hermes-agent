@@ -155,7 +155,25 @@ class ClaudeCodeSdkClient:
         if self._closed:
             return
         self._closed = True
-        if self._loop is not None and not self._loop.is_closed() and self._client is not None:
+        # If start() never completed successfully (_start_error set by
+        # _async_main() before self._started.set()), the SDK client never
+        # connected — there is nothing to disconnect. Skip scheduling the
+        # disconnect coroutine entirely rather than trying to detect
+        # whether the loop is still being pumped: checking `self._loop is
+        # not None and not self._loop.is_closed()` is a TOCTOU race —
+        # _async_main() can set _started (unblocking start(), which raises)
+        # before run_until_complete() actually returns and _run_loop()'s
+        # `finally: loop.close()` runs on the background thread. If close()
+        # lands in that window, the loop looks open but is no longer being
+        # pumped, so run_coroutine_threadsafe() schedules a coroutine that
+        # never executes and fut.result(timeout=timeout) blocks for the
+        # full timeout before raising (silently swallowed below).
+        if (
+            self._start_error is None
+            and self._loop is not None
+            and not self._loop.is_closed()
+            and self._client is not None
+        ):
 
             async def _disconnect() -> None:
                 await self._client.disconnect()
