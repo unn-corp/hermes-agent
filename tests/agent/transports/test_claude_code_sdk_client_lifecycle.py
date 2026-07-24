@@ -35,6 +35,19 @@ class _FailingFakeSdkClient(_FakeSdkClient):
         raise RuntimeError("boom: simulated connect failure")
 
 
+class _NaturallyExitingFakeSdkClient(_FakeSdkClient):
+    """Connects successfully, but its receive_messages() async generator
+    exits on its own after yielding a couple of messages — simulating a
+    subprocess/stream that closed naturally, not a connect failure and not
+    a client-initiated close()."""
+
+    async def receive_messages(self):
+        yield {"kind": "fake", "n": 1}
+        yield {"kind": "fake", "n": 2}
+        # Generator returns here — the `async for` loop in _async_main()
+        # exits on its own, with self._start_error still None.
+
+
 def test_start_spawns_thread_and_connects():
     client = ClaudeCodeSdkClient(client_factory=lambda options: _FakeSdkClient(options))
     client.start(timeout=5.0)
@@ -114,6 +127,33 @@ def test_close_after_failed_start_returns_promptly():
         assert elapsed < 1.0, (
             f"close() took {elapsed:.3f}s after a failed start — the "
             "disconnect-scheduling TOCTOU race is back"
+        )
+
+
+def test_close_after_natural_receive_loop_exit_returns_promptly():
+    """Regression for the same TOCTOU race, triggered by natural
+    termination instead of a failed connect: even after a *successful*
+    start(), the `async for message in self._client.receive_messages():`
+    loop in _async_main() can exit on its own (subprocess/stream closed) —
+    leaving self._start_error None forever. If close() only special-cased
+    the failed-start scenario, it could still land in the window where the
+    loop has stopped pumping but self._loop.is_closed() is still False,
+    schedule a doomed disconnect coroutine, and block for the full
+    `timeout`. close() must treat "loop stopped pumping for any reason" the
+    same way, so it returns near-instantly on every run, not just some."""
+    for _ in range(5):
+        client = ClaudeCodeSdkClient(
+            client_factory=lambda options: _NaturallyExitingFakeSdkClient(options)
+        )
+        client.start(timeout=5.0)
+
+        start = time.monotonic()
+        client.close(timeout=3.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, (
+            f"close() took {elapsed:.3f}s after the receive loop exited "
+            "naturally — the disconnect-scheduling TOCTOU race is back"
         )
 
 

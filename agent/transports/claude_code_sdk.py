@@ -126,6 +126,17 @@ class ClaudeCodeSdkClient:
         self._closed = False
         self._started = threading.Event()
         self._start_error: Optional[BaseException] = None
+        # Set the instant the `async for message in
+        # self._client.receive_messages():` loop in _async_main() exits, for
+        # ANY reason — natural completion (e.g. the SDK's subprocess/stream
+        # ended on its own), an exception, or the pre-existing self._closed
+        # break. This is a general "the loop has stopped pumping" signal:
+        # _start_error alone only covers a *failed* start, but the same
+        # TOCTOU stall in close() (scheduling a disconnect on a loop that's
+        # no longer being pumped but not yet .is_closed()) can also be
+        # triggered by natural subprocess/stream exit after a *successful*
+        # start, where _start_error stays None forever.
+        self._loop_stopped_pumping = threading.Event()
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client: Optional[Any] = None
@@ -157,19 +168,26 @@ class ClaudeCodeSdkClient:
         self._closed = True
         # If start() never completed successfully (_start_error set by
         # _async_main() before self._started.set()), the SDK client never
-        # connected — there is nothing to disconnect. Skip scheduling the
-        # disconnect coroutine entirely rather than trying to detect
-        # whether the loop is still being pumped: checking `self._loop is
-        # not None and not self._loop.is_closed()` is a TOCTOU race —
-        # _async_main() can set _started (unblocking start(), which raises)
+        # connected — there is nothing to disconnect. Likewise, if the
+        # receive_messages() loop in _async_main() has already exited on its
+        # own (self._loop_stopped_pumping set — natural subprocess/stream
+        # exit, not just a connect failure), the loop is no longer being
+        # pumped either. In both cases, skip scheduling the disconnect
+        # coroutine entirely rather than trying to detect whether the loop
+        # is still being pumped: checking `self._loop is not None and not
+        # self._loop.is_closed()` alone is a TOCTOU race — _async_main() can
+        # stop pumping (or set _started, unblocking start(), which raises)
         # before run_until_complete() actually returns and _run_loop()'s
         # `finally: loop.close()` runs on the background thread. If close()
         # lands in that window, the loop looks open but is no longer being
         # pumped, so run_coroutine_threadsafe() schedules a coroutine that
         # never executes and fut.result(timeout=timeout) blocks for the
-        # full timeout before raising (silently swallowed below).
+        # full timeout before raising (silently swallowed below). close()
+        # must skip the disconnect attempt whenever the loop has stopped
+        # pumping for ANY reason, so it returns near-instantly every time.
         if (
             self._start_error is None
+            and not self._loop_stopped_pumping.is_set()
             and self._loop is not None
             and not self._loop.is_closed()
             and self._client is not None
@@ -300,3 +318,9 @@ class ClaudeCodeSdkClient:
             pass
         except BaseException as exc:  # pragma: no cover - defensive
             self._events.put({"type": "transport_error", "error": str(exc)})
+        finally:
+            # Fires whenever this loop exits, for ANY reason: natural
+            # completion of receive_messages() (subprocess/stream closed on
+            # its own), an exception, or the self._closed break above. See
+            # the comment on self._loop_stopped_pumping in __init__.
+            self._loop_stopped_pumping.set()
