@@ -174,7 +174,10 @@ def run_claude_code_sdk_turn(
             )
 
             cwd = getattr(agent, "session_cwd", None)
-            agent._claude_code_session = ClaudeCodeSdkTurnSession(cwd=cwd)
+            agent._claude_code_session = ClaudeCodeSdkTurnSession(
+                cwd=cwd,
+                on_event=make_claude_code_sdk_event_bridge(agent),
+            )
 
     try:
         turn = agent._claude_code_session.run_turn(user_input=user_message)
@@ -185,6 +188,14 @@ def run_claude_code_sdk_turn(
         except Exception:
             pass
         agent._claude_code_session = None
+        _user_interrupted = bool(getattr(agent, "_interrupt_requested", False))
+        _interrupt_message = (
+            getattr(agent, "_interrupt_message", None)
+            if _user_interrupted
+            else None
+        )
+        if _user_interrupted:
+            agent.clear_interrupt()
         return {
             "final_response": (
                 f"Claude Code SDK turn failed: {exc}. "
@@ -195,7 +206,12 @@ def run_claude_code_sdk_turn(
             "api_calls": 0,
             "completed": False,
             "partial": True,
-            "interrupted": False,
+            "interrupted": _user_interrupted,
+            **(
+                {"interrupt_message": _interrupt_message}
+                if _interrupt_message
+                else {}
+            ),
             "error": str(exc),
         }
 
@@ -212,16 +228,38 @@ def run_claude_code_sdk_turn(
     if turn.projected_messages:
         messages.extend(turn.projected_messages)
 
+    # Mirror run_codex_app_server_turn's interrupt handoff: only a
+    # user-driven interrupt (Ctrl+C / explicit stop) should surface as
+    # "interrupted" to the caller. A turn.interrupted that was NOT paired
+    # with agent._interrupt_requested (e.g. this session's own internal
+    # turn-timeout deadline tripping in ClaudeCodeSdkTurnSession.run_turn)
+    # is a transport-level condition, not a user cancellation, and must not
+    # be reported as one — nor should it consume/clear an interrupt request
+    # that was never made.
+    _user_interrupted = bool(
+        turn.interrupted and getattr(agent, "_interrupt_requested", False)
+    )
+    _interrupt_message = (
+        getattr(agent, "_interrupt_message", None) if _user_interrupted else None
+    )
+    if _user_interrupted:
+        agent.clear_interrupt()
+
     return {
         "final_response": turn.final_text,
         "messages": messages,
         "api_calls": 1,
         "completed": not turn.interrupted and turn.error is None,
         "partial": turn.interrupted or turn.error is not None,
-        "interrupted": bool(turn.interrupted),
+        "interrupted": _user_interrupted,
+        **(
+            {"interrupt_message": _interrupt_message}
+            if _interrupt_message
+            else {}
+        ),
         "error": turn.error,
         "agent_persisted": False,
     }
 
 
-__all__ = ["run_claude_code_sdk_turn"]
+__all__ = ["run_claude_code_sdk_turn", "make_claude_code_sdk_event_bridge"]
