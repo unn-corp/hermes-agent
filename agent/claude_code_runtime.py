@@ -18,6 +18,131 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
+    """Build an on_event callback wiring claude-agent-sdk messages into
+    Hermes' gateway UI callbacks. Mirrors
+    agent.codex_runtime.make_codex_app_server_event_bridge — same four
+    target callbacks (tool_progress_callback, tool_start_callback,
+    tool_complete_callback, _fire_stream_delta), different source message
+    shapes (SDK dataclasses instead of codex JSON-RPC dicts).
+
+    tool_start_callback/tool_complete_callback are fired alongside
+    tool_progress_callback, not instead of it — verified against
+    tui_gateway/server.py, where tool_progress_callback's "tool.started"
+    case is a no-op; tool_start_callback/tool_complete_callback are what
+    actually produce the visible, stable-ID tool card in the TUI/Desktop.
+    Firing only tool_progress_callback (as an earlier draft of this bridge
+    did) would pass unit tests asserting on tool_progress_callback alone
+    while never actually rendering anything in the real gateway.
+
+    Scope note: this task handles ordinary AssistantMessage content blocks
+    (TextBlock, ToolUseBlock, ToolResultBlock) only. TaskStartedMessage /
+    TaskUpdatedMessage / TaskProgressMessage / TaskNotificationMessage
+    (sub-agent lifecycle) are handled by a later plan (Phase 3, sub-agent
+    visibility) — this bridge silently ignores those message types for now.
+
+    All callback invocations are guarded exactly like the Codex bridge —
+    a buggy display callback must not tear down the turn loop.
+    """
+    # tool_use_id -> (tool_name, args). Populated when a ToolUseBlock is
+    # seen; consumed when the matching ToolResultBlock arrives, so the
+    # completed-bubble can report the tool name and original args without
+    # re-deriving them.
+    started: dict[str, tuple[str, dict]] = {}
+
+    def _fire_tool_started(block) -> None:
+        name = block.name
+        args = block.input if isinstance(block.input, dict) else {}
+        started[block.id] = (name, args)
+        preview = None
+        if isinstance(args, dict):
+            command = args.get("command")
+            file_path = args.get("file_path")
+            preview = command or file_path
+            if isinstance(preview, str):
+                preview = preview[:120]
+        cb = getattr(agent, "tool_progress_callback", None)
+        if cb is not None:
+            try:
+                cb("tool.started", name, preview, args)
+            except Exception:
+                logger.debug(
+                    "tool_progress_callback raised on tool.started for %s",
+                    name, exc_info=True,
+                )
+        # Authoritative stable-ID tool card (TUI / Desktop). Claude's
+        # ToolUseBlock already carries a real unique id from the API, so
+        # unlike Codex's synthesized _deterministic_call_id, block.id can
+        # be used directly as the stable call id.
+        start_cb = getattr(agent, "tool_start_callback", None)
+        if start_cb is not None:
+            try:
+                start_cb(block.id, name, args)
+            except Exception:
+                logger.debug(
+                    "tool_start_callback raised for %s", name, exc_info=True,
+                )
+
+    def _fire_tool_completed(block) -> None:
+        prior = started.pop(block.tool_use_id, None)
+        name = prior[0] if prior is not None else "unknown"
+        args = prior[1] if prior is not None else {}
+        content = block.content
+        if isinstance(content, list):
+            content = "\n".join(
+                str(part.get("text", part)) if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        is_error = bool(getattr(block, "is_error", False))
+        cb = getattr(agent, "tool_progress_callback", None)
+        if cb is not None:
+            try:
+                cb("tool.completed", name, None, None,
+                   duration=None, is_error=is_error, result=content)
+            except Exception:
+                logger.debug(
+                    "tool_progress_callback raised on tool.completed for %s",
+                    name, exc_info=True,
+                )
+        complete_cb = getattr(agent, "tool_complete_callback", None)
+        if complete_cb is not None:
+            try:
+                complete_cb(block.tool_use_id, name, args, content)
+            except Exception:
+                logger.debug(
+                    "tool_complete_callback raised for %s", name, exc_info=True,
+                )
+
+    def _fire_text(text: str) -> None:
+        fn = getattr(agent, "_fire_stream_delta", None)
+        if fn is None:
+            return
+        try:
+            fn(text)
+        except Exception:
+            logger.debug("_fire_stream_delta raised", exc_info=True)
+
+    def on_event(event: dict) -> None:
+        if not isinstance(event, dict) or event.get("type") != "raw_message":
+            return
+        message = event.get("message")
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            return
+        for block in content:
+            block_type = type(block).__name__
+            if block_type == "ToolUseBlock":
+                _fire_tool_started(block)
+            elif block_type == "ToolResultBlock":
+                _fire_tool_completed(block)
+            elif block_type == "TextBlock":
+                text = getattr(block, "text", "")
+                if isinstance(text, str) and text:
+                    _fire_text(text)
+
+    return on_event
+
+
 def run_claude_code_sdk_turn(
     agent,
     *,
