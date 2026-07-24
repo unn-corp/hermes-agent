@@ -4,10 +4,10 @@ Each function takes the parent AIAgent as its first argument (agent).
 AIAgent keeps a thin forwarder method (_run_claude_code_sdk_turn) for
 consistency with the Codex app-server pattern.
 
-Status: skeleton only in this task. Event bridging (make_claude_code_sdk_
-event_bridge) and usage recording (_record_claude_code_sdk_usage) land in
-follow-up tasks in this same plan; this task wires the lazy session
-lifecycle and dispatch path only.
+Status: this task wires the lazy session lifecycle, dispatch path, and
+event bridging (make_claude_code_sdk_event_bridge, defined below).
+Usage recording (_record_claude_code_sdk_usage) lands in a follow-up task
+in this same plan.
 """
 
 from __future__ import annotations

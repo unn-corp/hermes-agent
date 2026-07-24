@@ -125,7 +125,7 @@ class ClaudeCodeSdkTurnSession:
                 for block in getattr(message, "content", []) or []:
                     if type(block).__name__ == "TextBlock":
                         text_parts.append(getattr(block, "text", ""))
-                    elif type(block).__name__ in {"ToolUseBlock", "ToolResultBlock"}:
+                    elif type(block).__name__ == "ToolResultBlock":
                         result.tool_iterations += 1
             elif type_name == "ResultMessage":
                 result.result_message = message
