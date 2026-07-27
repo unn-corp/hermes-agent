@@ -345,6 +345,17 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     return on_event
 
 
+def _resolve_claude_code_config_dir(agent) -> Optional[str]:
+    """Look up the active cli_accounts config_dir for the "claude_code_sdk"
+    provider, if AIAgent.switch_cli_account() has recorded one. Returns None
+    when no account has been explicitly selected — ClaudeCodeSdkTurnSession
+    then falls back to the claude CLI's default ~/.claude (unchanged default
+    behavior)."""
+    active_accounts = getattr(agent, "_active_cli_accounts", None) or {}
+    account = active_accounts.get("claude_code_sdk")
+    return account.config_dir if account is not None else None
+
+
 def run_claude_code_sdk_turn(
     agent,
     *,
@@ -378,6 +389,7 @@ def run_claude_code_sdk_turn(
             cwd = getattr(agent, "session_cwd", None)
             agent._claude_code_session = ClaudeCodeSdkTurnSession(
                 cwd=cwd,
+                claude_config_dir=_resolve_claude_code_config_dir(agent),
                 on_event=make_claude_code_sdk_event_bridge(agent),
                 can_use_tool=_make_claude_code_approval_callback(agent),
             )
