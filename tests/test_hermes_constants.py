@@ -450,6 +450,71 @@ class TestIsContainer:
         monkeypatch.setattr("builtins.open", _fake_open)
         assert is_container() is True
 
+    def test_container_host_is_not_a_container(self, monkeypatch, tmp_path):
+        """A machine that RUNS containers must not detect itself as one.
+
+        Regression: the mountinfo fallback used to substring-scan the whole
+        file, so a bare-metal Docker/containerd host false-positived — its
+        host-side management mounts (/var/lib/docker/rootfs/...,
+        /run/docker/netns/...) carry overlay lowerdir options referencing
+        /var/lib/containerd/..., putting the string "containerd" in mountinfo
+        on a plain desktop. Those markers only ever appear on non-"/" mount
+        points on a host; inside a real container they are on the "/" line.
+        Lines below are verbatim from an affected host.
+        """
+        import builtins
+        self._reset_cache(monkeypatch)
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        cgroup_file = tmp_path / "cgroup"
+        cgroup_file.write_text("0::/\n")  # cgroup v2 — no runtime marker
+        mountinfo_file = tmp_path / "mountinfo"
+        mountinfo_file.write_text(
+            "26 1 0:24 / / rw,relatime shared:1 - btrfs /dev/nvme0n1p2 rw\n"
+            "805 39 0:98 / /var/lib/docker/rootfs/overlayfs/88cb8dc9 rw,relatime "
+            "shared:866 - overlay overlay rw,lowerdir=/var/lib/containerd/"
+            "io.containerd.snapshotter.v1.overlayfs/snapshots/9/fs,index=off\n"
+            "968 50 0:5 net:[4026533882] /run/docker/netns/01b9f6f0da02 rw "
+            "shared:904 - nsfs nsfs rw\n"
+        )
+        _real_open = builtins.open
+
+        def _fake_open(p, *a, **kw):
+            if p == "/proc/1/cgroup":
+                return _real_open(str(cgroup_file), *a, **kw)
+            if p == "/proc/self/mountinfo":
+                return _real_open(str(mountinfo_file), *a, **kw)
+            return _real_open(p, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", _fake_open)
+        assert is_container() is False
+
+    def test_detects_kubepods_bind_mount_root(self, monkeypatch, tmp_path):
+        """A k8s pod bind mount carries 'kubepods' in the mount ROOT field."""
+        import builtins
+        self._reset_cache(monkeypatch)
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        cgroup_file = tmp_path / "cgroup"
+        cgroup_file.write_text("0::/\n")
+        mountinfo_file = tmp_path / "mountinfo"
+        mountinfo_file.write_text(
+            "26 1 0:24 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n"
+            "600 26 8:1 /var/lib/kubelet/pods/abc-123/kubepods/etc-hosts /etc/hosts "
+            "rw,relatime - ext4 /dev/sda1 rw\n"
+        )
+        _real_open = builtins.open
+
+        def _fake_open(p, *a, **kw):
+            if p == "/proc/1/cgroup":
+                return _real_open(str(cgroup_file), *a, **kw)
+            if p == "/proc/self/mountinfo":
+                return _real_open(str(mountinfo_file), *a, **kw)
+            return _real_open(p, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", _fake_open)
+        assert is_container() is True
+
     def test_caches_result(self, monkeypatch):
         """Second call uses cached value without re-probing."""
         monkeypatch.setattr(hermes_constants, "_container_detected", True)

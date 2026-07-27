@@ -1138,14 +1138,38 @@ def is_container() -> bool:
     except OSError:
         pass
     # cgroup v2: /proc/1/cgroup is just "0::/" with no marker. The container
-    # runtime still shows up in the mount table (overlay rootfs, runtime mount
-    # paths), so scan mountinfo as a last resort.
+    # runtime still shows up in the mount table, so scan mountinfo as a last
+    # resort — but ONLY the line for our own root mount ("/").
+    #
+    # A whole-file substring scan here false-positives on any container HOST:
+    # a machine that merely *runs* containers has host-side management mounts
+    # (/var/lib/docker/rootfs/..., /run/docker/netns/...) whose overlay
+    # lowerdir options reference /var/lib/containerd/..., so "containerd"
+    # appears in mountinfo on a bare-metal desktop. Inside a real container the
+    # marker is on the "/" line itself:
+    #     <id> <parent> <maj:min> / / rw,relatime - overlay overlay rw,lowerdir=/var/lib/containerd/...
+    # while on a host those markers only ever appear on non-"/" mount points.
+    # mountinfo fields: id parent maj:min root mountpoint options... (mountpoint
+    # is index 4).
     try:
         with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
-            mountinfo = f.read()
-            if any(marker in mountinfo for marker in ("kubepods", "containerd", "crio")):
-                _container_detected = True
-                return True
+            for line in f:
+                fields = line.split()
+                if len(fields) < 5:
+                    continue
+                mount_root, mount_point = fields[3], fields[4]
+                # Our own rootfs backed by a container runtime.
+                if mount_point == "/" and any(
+                    marker in line for marker in ("kubepods", "containerd", "crio", "docker")
+                ):
+                    _container_detected = True
+                    return True
+                # Kubernetes pod bind mounts (/etc/hosts, /dev/termination-log)
+                # are sourced from /var/lib/kubelet/pods/<uid>/... — the marker
+                # lands in the mount ROOT field, not the mount point.
+                if "kubepods" in mount_root:
+                    _container_detected = True
+                    return True
     except OSError:
         pass
     _container_detected = False
