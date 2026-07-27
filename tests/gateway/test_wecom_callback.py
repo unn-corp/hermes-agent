@@ -5,6 +5,19 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
+# The adapter parses untrusted callback bodies with defusedxml, which ships in
+# the opt-in `wecom` extra. That extra is deliberately NOT in `[all]` (see the
+# policy comment on pyproject.toml's `all` list: opt-in messaging backends
+# resolve through lazy-install instead), so a correctly provisioned dev or CI
+# environment still won't have it. The adapter itself degrades cleanly —
+# check_wecom_callback_requirements() returns False and it never starts — so
+# these tests skip rather than fail with `'NoneType' object has no attribute
+# 'fromstring'` on every machine without the extra.
+pytest.importorskip(
+    "defusedxml",
+    reason="wecom extra not installed (pip install 'hermes-agent[wecom]')",
+)
+
 from gateway.config import PlatformConfig
 from plugins.platforms.wecom.callback_adapter import WecomCallbackAdapter
 from plugins.platforms.wecom.wecom_crypto import WXBizMsgCrypt
