@@ -11341,6 +11341,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "codex-runtime":
             return await self._handle_codex_runtime_command(event)
 
+        if canonical == "cli-account":
+            return await self._handle_cli_account_command(event)
+
         if canonical == "personality":
             return await self._handle_personality_command(event)
 

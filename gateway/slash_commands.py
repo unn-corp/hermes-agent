@@ -2203,6 +2203,59 @@ class GatewaySlashCommandsMixin:
 
         return await _finish_switch()
 
+    def _cached_agent_for_session(self, session_key: str):
+        """Live AIAgent for a session, or None before the first turn.
+
+        Idle agents live in _agent_cache; one that is mid-turn is only in
+        _running_agents, so check both — mirrors the session-expiry lookup.
+        """
+        from gateway.run import _AGENT_PENDING_SENTINEL
+
+        agent = None
+        cache_lock = getattr(self, "_agent_cache_lock", None)
+        if cache_lock is not None:
+            with cache_lock:
+                cached = self._agent_cache.get(session_key)
+                agent = cached[0] if isinstance(cached, tuple) else (cached or None)
+        if agent is None:
+            agent = getattr(self, "_running_agents", {}).get(session_key)
+        if agent is _AGENT_PENDING_SENTINEL:
+            return None
+        return agent
+
+    async def _handle_cli_account_command(self, event: MessageEvent) -> str:
+        """Handle /cli-account in the gateway (Desktop, Telegram, Discord…).
+
+            /cli-account                          — list registered accounts
+            /cli-account codex work               — switch codex to "work"
+            /cli-account claude_code_sdk personal — switch Claude Code
+
+        Unlike /codex-runtime, which persists a config value for the NEXT
+        session, this hot-swaps the live agent: switch_cli_account() tears down
+        the running CLI session so the next turn re-spawns against the new
+        config_dir. Conversation history survives, because both transports pass
+        Hermes' history as per-turn context rather than owning a server-side
+        thread — so the cached agent is deliberately NOT evicted here.
+        """
+        from hermes_cli import cli_account_switch as cas
+
+        raw_args = event.get_command_args().strip() if event else ""
+        provider, account_name, errors = cas.parse_args(raw_args)
+        if errors:
+            return "❌ " + "\n❌ ".join(errors)
+
+        agent = None
+        if provider is not None:
+            try:
+                agent = self._cached_agent_for_session(
+                    self._session_key_for_source(event.source)
+                )
+            except Exception:
+                logger.debug("could not resolve agent for /cli-account", exc_info=True)
+
+        status = cas.apply(agent, provider, account_name)
+        return f"{'✓' if status.success else '✗'} {status.message}"
+
     async def _handle_codex_runtime_command(self, event: MessageEvent) -> str:
         """Handle /codex-runtime command in the gateway.
 
