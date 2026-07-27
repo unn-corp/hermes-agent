@@ -25,6 +25,18 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, SendResult
 from gateway.session import SessionEntry, SessionSource
 
+# How long the deliberately-slow compression worker parks before it is
+# released. It is released explicitly by the test, so this is only an upper
+# bound; it also sets the scale for the "did the hygiene timeout actually
+# fire?" assertion below — if the timeout regressed, elapsed would jump from
+# milliseconds to roughly this value.
+WORKER_BLOCK_SECONDS = 4
+
+# Deadlock guard, NOT a performance assertion — see WORKER_BLOCK_SECONDS.
+# Generous on purpose so suite-level CPU contention cannot trip it; a genuine
+# hang still fails rather than wedging the runner.
+DEADLOCK_TIMEOUT = 30
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -722,7 +734,7 @@ async def test_session_hygiene_timeout_continues_to_agent_and_sets_cooldown(monk
             self, messages, *_args, commit_fence=None, **_kwargs
         ):
             worker_started.set()
-            assert release_worker.wait(timeout=2)
+            assert release_worker.wait(timeout=WORKER_BLOCK_SECONDS)
             if commit_fence is not None and not commit_fence.begin_commit():
                 return (messages, None)
             try:
@@ -811,7 +823,18 @@ async def test_session_hygiene_timeout_continues_to_agent_and_sets_cooldown(monk
     elapsed = time.monotonic() - started
 
     assert result == "ok"
-    assert elapsed < 0.15
+    # The point of this bound is that _handle_message returned on the 10ms
+    # hygiene timeout instead of blocking on the worker, which sits in
+    # release_worker.wait() for WORKER_BLOCK_SECONDS. So the meaningful
+    # comparison is "far below the worker's block", not an absolute latency
+    # budget — this is not a performance test.
+    #
+    # It was 0.15s, which made this the suite's flakiest assertion: under the
+    # parallel runner (48 workers on 24 cores) the same correct behaviour
+    # measures ~0.36s purely from scheduler contention. Keep a wide margin
+    # under WORKER_BLOCK_SECONDS instead, which still fails loudly if the
+    # timeout ever stops firing (elapsed would jump to the full block).
+    assert elapsed < WORKER_BLOCK_SECONDS / 4
     assert worker_started.is_set()
     assert runner._run_agent.await_count == 1
     assert runner._hygiene_compression_failure_cooldowns["sess-timeout"] > time.time()
@@ -821,7 +844,7 @@ async def test_session_hygiene_timeout_continues_to_agent_and_sets_cooldown(monk
     SlowCompressAgent.last_instance.close.assert_not_called()
 
     release_worker.set()
-    await asyncio.wait_for(asyncio.to_thread(cleanup_done.wait), timeout=2)
+    await asyncio.wait_for(asyncio.to_thread(cleanup_done.wait), timeout=DEADLOCK_TIMEOUT)
 
     # The late worker observed cancellation at the commit fence, so it never
     # mutated the live session after the new turn began. Cleanup still ran once
