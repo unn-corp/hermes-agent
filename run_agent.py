@@ -2881,6 +2881,21 @@ class AIAgent:
                         exc_info=True,
                     )
 
+        # Claude Code SDK owns its own background thread + event loop and
+        # watches ClaudeCodeSdkClient's internal queue rather than Hermes'
+        # per-thread flag — mirrors the codex_app_server branch above.
+        if getattr(self, "api_mode", None) == "claude_code_sdk":
+            _claude_code_session = getattr(self, "_claude_code_session", None)
+            _request_interrupt = getattr(_claude_code_session, "request_interrupt", None)
+            if callable(_request_interrupt):
+                try:
+                    _request_interrupt()
+                except Exception:
+                    logger.debug(
+                        "Failed to interrupt Claude Code SDK turn",
+                        exc_info=True,
+                    )
+
         # A cron turn performs its API request on the conversation thread to
         # avoid the nested interrupt-worker deadlock.  Unlike the normal worker
         # path, its client is registered here so this cross-thread interrupt can
@@ -6700,6 +6715,59 @@ class AIAgent:
         """Forwarder — see ``agent.claude_code_runtime.run_claude_code_sdk_turn``."""
         from agent.claude_code_runtime import run_claude_code_sdk_turn
         return run_claude_code_sdk_turn(self, user_message=user_message, original_user_message=original_user_message, messages=messages, effective_task_id=effective_task_id, should_review_memory=should_review_memory)
+
+    def switch_cli_account(self, provider: str, account_name: str) -> None:
+        """Live mid-conversation hot-swap of the named CLI account used by
+        the ``codex_app_server`` / ``claude_code_sdk`` runtimes.
+
+        Resolves the named account via agent.cli_accounts, interrupts +
+        closes any live session for that provider, clears the cached
+        session attribute, and records the newly active account so the
+        next turn's lazy-init block in codex_runtime.py / claude_code_runtime.py
+        picks up the new config_dir. Conversation history is untouched —
+        both transports pass Hermes's full conversation-so-far as per-turn
+        context rather than owning a persistent server-side thread, so
+        tearing down and respawning the subprocess does not lose history
+        (see docs/design/claude-code-integration.md, "Live account hot-swap").
+
+        Raises ValueError if provider isn't "codex"/"claude_code_sdk", or if
+        no matching account is registered.
+        """
+        from agent.cli_accounts import resolve_cli_account
+
+        if provider not in ("codex", "claude_code_sdk"):
+            raise ValueError(f"Unknown cli account provider: {provider!r}")
+
+        account = resolve_cli_account(account_name, provider)
+        if account is None:
+            raise ValueError(
+                f"No cli_accounts entry named {account_name!r} for provider {provider!r}"
+            )
+
+        session_attr = "_codex_session" if provider == "codex" else "_claude_code_session"
+        session = getattr(self, session_attr, None)
+        if session is not None:
+            request_interrupt = getattr(session, "request_interrupt", None)
+            if callable(request_interrupt):
+                try:
+                    request_interrupt()
+                except Exception:
+                    logger.debug(
+                        "%s interrupt failed during account switch",
+                        session_attr, exc_info=True,
+                    )
+            try:
+                session.close()
+            except Exception:
+                logger.debug(
+                    "%s close failed during account switch",
+                    session_attr, exc_info=True,
+                )
+            setattr(self, session_attr, None)
+
+        if not hasattr(self, "_active_cli_accounts"):
+            self._active_cli_accounts = {}
+        self._active_cli_accounts[provider] = account
 
 def main(
     query: str = None,
