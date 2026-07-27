@@ -1396,6 +1396,17 @@ DEFAULT_CONFIG = {
         },
     },
 
+    # Per-instance options for the `claude` CLI driven by the claude_code_sdk
+    # runtime (model.anthropic_runtime). Read by
+    # agent/claude_code_runtime.py::_resolve_claude_cli_options; inert unless
+    # that runtime is enabled. config_dir here is the DEFAULT home — a live
+    # /cli-account switch outranks it for the current session.
+    "claude_code": {
+        "binary_path": "",   # empty = "claude" from PATH
+        "config_dir": "",    # empty = the CLI's own default (~/.claude)
+        "extra_args": "",    # free-text CLI flags, e.g. "--chrome"
+    },
+
     "compression": {
         "enabled": True,
         "threshold": 0.50,            # compress when context usage exceeds this ratio.

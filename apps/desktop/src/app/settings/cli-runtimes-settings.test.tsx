@@ -50,6 +50,41 @@ describe('CliRuntimesSettings', () => {
     expect(await screen.findByText('Use claude CLI')).toBeTruthy()
   })
 
+  it('renders the Claude CLI fields with values from config', async () => {
+    seed({ claude_code: { binary_path: '/opt/claude/bin/claude', extra_args: '--chrome' } })
+    render(<CliRuntimesSettings />)
+
+    expect(await screen.findByDisplayValue('/opt/claude/bin/claude')).toBeTruthy()
+    expect(screen.getByDisplayValue('--chrome')).toBeTruthy()
+    expect(screen.getByText('Path to the Claude binary used by this instance.')).toBeTruthy()
+    expect(screen.getByText('Additional CLI arguments passed on session start.')).toBeTruthy()
+  })
+
+  it('saves a Claude CLI field on blur, nesting it under claude_code', async () => {
+    seed()
+    render(<CliRuntimesSettings />)
+
+    const input = await screen.findByPlaceholderText('claude')
+    fireEvent.change(input, { target: { value: '/opt/claude/bin/claude' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(1))
+    const saved = saveHermesConfig.mock.calls[0][0] as Record<string, Record<string, string>>
+
+    expect(saved.claude_code.binary_path).toBe('/opt/claude/bin/claude')
+  })
+
+  it('does not re-save when the value is unchanged', async () => {
+    seed({ claude_code: { binary_path: '/opt/claude/bin/claude' } })
+    render(<CliRuntimesSettings />)
+
+    const input = await screen.findByDisplayValue('/opt/claude/bin/claude')
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalled())
+    expect(saveHermesConfig).not.toHaveBeenCalled()
+  })
+
   it('lists registered accounts with their config dir', async () => {
     seed({}, [{ config_dir: '/home/u/.claude-personal', name: 'personal', provider: 'claude_code_sdk' }])
     render(<CliRuntimesSettings />)

@@ -555,15 +555,93 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     return on_event
 
 
+def _parse_claude_extra_args(raw: Optional[str]) -> Dict[str, Optional[str]]:
+    """Turn a free-text CLI-argument string into claude-agent-sdk's
+    ``extra_args`` shape: ``dict[flag_without_dashes, value_or_None]``, where
+    None means a valueless boolean flag.
+
+    Accepts the forms a user would actually type in a settings box:
+    ``--chrome``, ``--model opus``, ``--model=opus``, quoted values. A stray
+    positional (no leading dash) is dropped rather than turned into a nonsense
+    flag, and a malformed string (unbalanced quotes) yields {} instead of
+    raising — a bad settings value must not break every turn.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+
+    import shlex
+
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        logger.debug("could not parse claude extra_args %r", raw, exc_info=True)
+        return {}
+
+    parsed: Dict[str, Optional[str]] = {}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("-"):
+            index += 1  # stray positional — ignore
+            continue
+        flag = token.lstrip("-")
+        if "=" in flag:
+            name, _, value = flag.partition("=")
+            if name:
+                parsed[name] = value
+            index += 1
+            continue
+        following = tokens[index + 1] if index + 1 < len(tokens) else None
+        if following is not None and not following.startswith("-"):
+            parsed[flag] = following
+            index += 2
+        else:
+            parsed[flag] = None
+            index += 1
+    return parsed
+
+
+def _resolve_claude_cli_options() -> Dict[str, Any]:
+    """Per-instance `claude` CLI options from config (the claude_code section).
+
+    Mirrors what a user can set in Settings → Providers → CLI Runtimes:
+    binary path, default CLAUDE_CONFIG_DIR, and extra launch arguments.
+    """
+    import os
+
+    from hermes_cli.config import load_config_readonly
+
+    try:
+        section = (load_config_readonly() or {}).get("claude_code") or {}
+    except Exception:
+        logger.debug("could not read claude_code config section", exc_info=True)
+        section = {}
+    if not isinstance(section, dict):
+        section = {}
+
+    binary = str(section.get("binary_path") or "").strip()
+    config_dir = str(section.get("config_dir") or "").strip()
+    return {
+        "claude_bin": binary or "claude",
+        "config_dir": os.path.expanduser(config_dir) if config_dir else None,
+        "extra_args": _parse_claude_extra_args(section.get("extra_args")),
+    }
+
+
 def _resolve_claude_code_config_dir(agent) -> Optional[str]:
-    """Look up the active cli_accounts config_dir for the "claude_code_sdk"
-    provider, if AIAgent.switch_cli_account() has recorded one. Returns None
-    when no account has been explicitly selected — ClaudeCodeSdkTurnSession
-    then falls back to the claude CLI's default ~/.claude (unchanged default
-    behavior)."""
+    """Which CLAUDE_CONFIG_DIR the next session should use.
+
+    An account selected live via AIAgent.switch_cli_account() wins, so
+    /cli-account visibly takes effect. Otherwise fall back to the configured
+    default (claude_code.config_dir), and finally to None — letting the CLI
+    use its own ~/.claude, the unchanged default behaviour.
+    """
     active_accounts = getattr(agent, "_active_cli_accounts", None) or {}
     account = active_accounts.get("claude_code_sdk")
-    return account.config_dir if account is not None else None
+    if account is not None:
+        return account.config_dir
+    return _resolve_claude_cli_options()["config_dir"]
 
 
 def run_claude_code_sdk_turn(
@@ -597,9 +675,12 @@ def run_claude_code_sdk_turn(
             )
 
             cwd = getattr(agent, "session_cwd", None)
+            cli_options = _resolve_claude_cli_options()
             agent._claude_code_session = ClaudeCodeSdkTurnSession(
                 cwd=cwd,
+                claude_bin=cli_options["claude_bin"],
                 claude_config_dir=_resolve_claude_code_config_dir(agent),
+                extra_args=cli_options["extra_args"],
                 on_event=make_claude_code_sdk_event_bridge(agent),
                 can_use_tool=_make_claude_code_approval_callback(agent),
             )

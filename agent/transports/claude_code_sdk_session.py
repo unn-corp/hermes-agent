@@ -58,13 +58,17 @@ class ClaudeCodeSdkTurnSession:
         self,
         *,
         cwd: Optional[str] = None,
+        claude_bin: str = "claude",
         claude_config_dir: Optional[str] = None,
+        extra_args: Optional[dict] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         can_use_tool: Optional[Callable[..., Any]] = None,
         client_factory: Optional[Callable[..., ClaudeCodeSdkClient]] = None,
     ) -> None:
         self._cwd = cwd
+        self._claude_bin = claude_bin
         self._claude_config_dir = claude_config_dir
+        self._extra_args = extra_args or {}
         self._on_event = on_event
         self._can_use_tool = can_use_tool
         self._client_factory = client_factory or ClaudeCodeSdkClient
@@ -76,7 +80,9 @@ class ClaudeCodeSdkTurnSession:
             return
         self._client = self._client_factory(
             cwd=self._cwd,
+            claude_bin=self._claude_bin,
             claude_config_dir=self._claude_config_dir,
+            extra_args=self._extra_args,
             can_use_tool=self._can_use_tool,
         )
         self._client.start()

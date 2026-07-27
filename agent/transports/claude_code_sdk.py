@@ -112,6 +112,7 @@ class ClaudeCodeSdkClient:
         claude_config_dir: Optional[str] = None,
         cwd: Optional[str] = None,
         env: Optional[dict[str, str]] = None,
+        extra_args: Optional[dict[str, Optional[str]]] = None,
         can_use_tool: Optional[Callable[..., Any]] = None,
         client_factory: Optional[Callable[[Any], Any]] = None,
     ) -> None:
@@ -119,6 +120,9 @@ class ClaudeCodeSdkClient:
         self._claude_config_dir = claude_config_dir
         self._cwd = cwd
         self._extra_env = env
+        # Free-text CLI flags from Settings, already parsed into the SDK's
+        # dict[flag, value|None] shape by claude_code_runtime.
+        self._extra_args = extra_args or {}
         self._can_use_tool = can_use_tool
         self._client_factory = client_factory
 
@@ -294,6 +298,7 @@ class ClaudeCodeSdkClient:
                 cwd=self._cwd,
                 cli_path=self._claude_bin,
                 env=spawn_env,
+                extra_args=self._extra_args,
                 include_partial_messages=True,
                 can_use_tool=self._can_use_tool,
             )

@@ -14,6 +14,7 @@ import {
 import { Terminal, Trash2 } from '@/lib/icons'
 import { notify } from '@/store/notifications'
 
+import { getNested, setNested } from './helpers'
 import { ListRow, SectionHeading, SettingsContent } from './primitives'
 
 // Copy here is deliberately plain English literals rather than useI18n(), for
@@ -54,12 +55,42 @@ const RUNTIMES: RuntimeSpec[] = [
   }
 ]
 
+type ClaudeCliKey = 'claude_code.binary_path' | 'claude_code.config_dir' | 'claude_code.extra_args'
+
+const CLAUDE_CLI_FIELDS: {
+  configKey: ClaudeCliKey
+  description: string
+  label: string
+  placeholder: string
+}[] = [
+  {
+    configKey: 'claude_code.binary_path',
+    description: 'Path to the Claude binary used by this instance.',
+    label: 'Binary path',
+    placeholder: 'claude'
+  },
+  {
+    configKey: 'claude_code.config_dir',
+    description:
+      'Custom Claude home and config directory. Keeps .claude.json and .claude separate. A CLI account selected with /cli-account overrides this for the current session.',
+    label: 'CLAUDE_CONFIG_DIR path',
+    placeholder: '~/.claude'
+  },
+  {
+    configKey: 'claude_code.extra_args',
+    description: 'Additional CLI arguments passed on session start.',
+    label: 'Launch arguments',
+    placeholder: 'e.g. --chrome'
+  }
+]
+
 function providerLabel(provider: CliAccount['provider']): string {
   return provider === 'claude_code_sdk' ? 'Claude Code' : 'Codex'
 }
 
 export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => void }) {
   const [runtimes, setRuntimes] = useState<Record<string, string>>({})
+  const [claudeCli, setClaudeCli] = useState<Record<string, string>>({})
   const [accounts, setAccounts] = useState<CliAccount[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -86,6 +117,11 @@ export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => v
           model_anthropic_runtime: String(config.model_anthropic_runtime ?? 'auto'),
           model_openai_runtime: String(config.model_openai_runtime ?? 'auto')
         })
+        setClaudeCli(
+          Object.fromEntries(
+            CLAUDE_CLI_FIELDS.map(field => [field.configKey, String(getNested(config, field.configKey) ?? '')])
+          )
+        )
       } catch {
         setRuntimes({ model_anthropic_runtime: 'auto', model_openai_runtime: 'auto' })
       }
@@ -136,6 +172,26 @@ export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => v
     }
   }
 
+  // Committed on blur/Enter rather than per-keystroke: each save is a full
+  // config round trip, and these are free-text paths the user types into.
+  const commitClaudeField = async (key: ClaudeCliKey) => {
+    const value = (claudeCli[key] ?? '').trim()
+
+    try {
+      const config = await getHermesConfigRecord()
+
+      if (String(getNested(config, key) ?? '') === value) {
+        return // nothing changed — don't churn the config file on every blur
+      }
+
+      await saveHermesConfig(setNested(config, key, value))
+      onConfigSaved?.()
+      notify({ kind: 'info', message: 'Saved. Applies to the next Claude Code session.' })
+    } catch (error) {
+      notify({ kind: 'error', message: error instanceof Error ? error.message : 'Could not save' })
+    }
+  }
+
   const removeAccount = async (name: string) => {
     try {
       await deleteCliAccount(name)
@@ -175,6 +231,37 @@ export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => v
           description={runtime.description}
           key={runtime.configKey}
           title={runtime.label}
+          wide
+        />
+      ))}
+
+      <SectionHeading icon={Terminal} title="Claude Code CLI" />
+      <p className="mb-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
+        How this instance launches the <code>claude</code> binary. All optional — leave blank to use
+        the CLI’s own defaults.
+      </p>
+
+      {CLAUDE_CLI_FIELDS.map(field => (
+        <ListRow
+          action={
+            <Input
+              className="w-72"
+              onBlur={() => void commitClaudeField(field.configKey)}
+              onChange={event =>
+                setClaudeCli(current => ({ ...current, [field.configKey]: event.target.value }))
+              }
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  void commitClaudeField(field.configKey)
+                }
+              }}
+              placeholder={field.placeholder}
+              value={claudeCli[field.configKey] ?? ''}
+            />
+          }
+          description={field.description}
+          key={field.configKey}
+          title={field.label}
           wide
         />
       ))}
