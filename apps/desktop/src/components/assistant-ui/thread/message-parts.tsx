@@ -9,6 +9,7 @@ import { type ComponentProps, type FC, type ReactNode, useEffect, useRef, useSta
 import { ClarifyTool } from '@/components/assistant-ui/clarify-tool'
 import { MarkdownText, MarkdownTextContent } from '@/components/assistant-ui/markdown-text'
 import { ToolFallback, ToolGroupSlot } from '@/components/assistant-ui/tool/fallback'
+import { SubagentTask } from '@/components/assistant-ui/tool/subagent-task'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
 import { ActivityTimerText } from '@/components/chat/activity-timer-text'
 import { DisclosureRow } from '@/components/chat/disclosure-row'
@@ -48,6 +49,10 @@ const ChainToolFallback: FC<ToolCallMessagePartProps> = props => {
 
   if (props.toolName === 'clarify') {
     return <ClarifyTool {...props} />
+  }
+
+  if (props.toolName === 'claude_subagent_task') {
+    return <SubagentTask {...props} />
   }
 
   return <ToolFallback {...props} />
