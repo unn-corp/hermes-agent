@@ -746,6 +746,8 @@ export interface CliAccount {
   name: string
   provider: 'codex' | 'claude_code_sdk'
   config_dir: string
+  /** Present on list responses: this account is the persisted default. */
+  active?: boolean
 }
 
 /**
@@ -766,6 +768,24 @@ export function addCliAccount(account: CliAccount): Promise<{ ok: boolean; probe
     path: '/api/cli-accounts',
     method: 'POST',
     body: account
+  })
+}
+
+/**
+ * Make a Claude Code account the persisted default for the next session, also
+ * enabling the runtime and (unless switchModel is false) moving the main model
+ * onto Claude so the choice actually takes effect. Live mid-conversation
+ * switching is /cli-account, which outranks this for the running session.
+ */
+export function activateCliAccount(
+  name: string,
+  switchModel = true
+): Promise<{ ok: boolean; account: string; model: string }> {
+  return window.hermesDesktop.api<{ ok: boolean; account: string; model: string }>({
+    ...profileScoped(),
+    path: '/api/cli-accounts/activate',
+    method: 'POST',
+    body: { name, switch_model: switchModel }
   })
 }
 

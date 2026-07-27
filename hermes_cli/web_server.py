@@ -6517,12 +6517,31 @@ async def list_cli_accounts_endpoint(
     """
     with _config_profile_scope(profile):
         accounts = load_cli_accounts()
+        # Which one the next session will use, so the UI can show a selection
+        # rather than an undifferentiated list. Compared on the resolved path so
+        # "~/.claude" and "/home/u/.claude" match.
+        try:
+            active_dir = str(
+                ((load_config().get("claude_code") or {}) or {}).get("config_dir") or ""
+            )
+        except Exception:
+            active_dir = ""
+    active_resolved = os.path.realpath(os.path.expanduser(active_dir)) if active_dir else ""
     wanted = str(provider or "").strip().lower()
     if wanted:
         accounts = [a for a in accounts if a.provider == wanted]
     return {
         "accounts": [
-            {"name": a.name, "provider": a.provider, "config_dir": a.config_dir}
+            {
+                "name": a.name,
+                "provider": a.provider,
+                "config_dir": a.config_dir,
+                "active": bool(
+                    active_resolved
+                    and a.provider == "claude_code_sdk"
+                    and os.path.realpath(os.path.expanduser(a.config_dir)) == active_resolved
+                ),
+            }
             for a in accounts
         ]
     }
@@ -6563,6 +6582,77 @@ async def add_cli_account_endpoint(body: CliAccountCreate, profile: Optional[str
         accounts[name] = {"provider": provider, "config_dir": config_dir}
         save_config(config)
     return {"ok": True, "probe": message}
+
+
+class CliAccountActivate(BaseModel):
+    name: str
+    switch_model: bool = True
+    profile: Optional[str] = None
+
+
+@app.post("/api/cli-accounts/activate")
+async def activate_cli_account_endpoint(
+    body: CliAccountActivate, profile: Optional[str] = None
+):
+    """Make a Claude Code account the persisted default.
+
+    The settings page is not session-scoped, so this sets the DEFAULT the next
+    session picks up (claude_code.config_dir) rather than hot-swapping a live
+    conversation — that stays on /cli-account, which calls
+    AIAgent.switch_cli_account() and outranks this default for the running
+    session.
+
+    Enabling the runtime and moving the main model onto Claude are part of the
+    same action on purpose: pointing at an account while the runtime is off, or
+    while the selected model resolves to some other provider, changes nothing
+    observable and reads as broken.
+    """
+    name = str(body.name or "").strip()
+    with _config_profile_scope(body.profile or profile):
+        config = load_config()
+        accounts = config.get("cli_accounts")
+        entry = accounts.get(name) if isinstance(accounts, dict) else None
+        if not entry:
+            raise HTTPException(status_code=404, detail=f'No cli account named "{name}".')
+
+        provider = str(entry.get("provider") or "").strip()
+        if provider != "claude_code_sdk":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f'Account "{name}" is a {provider!r} account; only '
+                    "claude_code_sdk accounts can be activated here "
+                    "(claude_code.config_dir is CLAUDE_CONFIG_DIR)."
+                ),
+            )
+
+        claude_section = config.setdefault("claude_code", {})
+        if not isinstance(claude_section, dict):
+            claude_section = {}
+            config["claude_code"] = claude_section
+        claude_section["config_dir"] = str(entry.get("config_dir") or "")
+
+        model_cfg = config.get("model")
+        if not isinstance(model_cfg, dict):
+            model_cfg = {"default": str(model_cfg or "")}
+            config["model"] = model_cfg
+        model_cfg["anthropic_runtime"] = "claude_code_sdk"
+
+        chosen_model = ""
+        if body.switch_model:
+            try:
+                chosen_model = str(
+                    (get_recommended_default_model(provider="anthropic") or {}).get("model") or ""
+                )
+            except Exception:
+                _log.debug("recommended anthropic model lookup failed", exc_info=True)
+            if chosen_model:
+                model_cfg["default"] = chosen_model
+                model_cfg["provider"] = "anthropic"
+
+        save_config(config)
+
+    return {"ok": True, "account": name, "model": chosen_model}
 
 
 @app.delete("/api/cli-accounts/{name}")

@@ -6,9 +6,11 @@ const deleteCliAccount = vi.fn()
 const getHermesConfigRecord = vi.fn()
 const listCliAccounts = vi.fn()
 const saveHermesConfig = vi.fn()
+const activateCliAccount = vi.fn()
 const notify = vi.fn()
 
 vi.mock('@/hermes', () => ({
+  activateCliAccount: (...a: unknown[]) => activateCliAccount(...a),
   addCliAccount: (...a: unknown[]) => addCliAccount(...a),
   deleteCliAccount: (...a: unknown[]) => deleteCliAccount(...a),
   getHermesConfigRecord: () => getHermesConfigRecord(),
@@ -91,6 +93,34 @@ describe('CliRuntimesSettings', () => {
 
     expect(await screen.findByText('personal — Claude Code')).toBeTruthy()
     expect(screen.getByText('/home/u/.claude-personal')).toBeTruthy()
+  })
+
+  it('marks the active account as in use and offers Use on the others', async () => {
+    seed({}, [
+      { active: true, config_dir: '/a', name: 'personal', provider: 'claude_code_sdk' },
+      { active: false, config_dir: '/b', name: 'work', provider: 'claude_code_sdk' }
+    ])
+    render(<CliRuntimesSettings />)
+
+    const inUse = await screen.findByRole('button', { name: 'In use' })
+    expect((inUse as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Use' })).toBeTruthy()
+  })
+
+  it('activating an account reports the model it switched to', async () => {
+    seed({}, [{ active: false, config_dir: '/b', name: 'work', provider: 'claude_code_sdk' }])
+    activateCliAccount.mockResolvedValue({ account: 'work', model: 'claude-fable-5', ok: true })
+    render(<CliRuntimesSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use' }))
+
+    await waitFor(() => expect(activateCliAccount).toHaveBeenCalledWith('work'))
+    await waitFor(() =>
+      expect(notify).toHaveBeenCalledWith({
+        kind: 'info',
+        message: 'Using "work" — model set to claude-fable-5.'
+      })
+    )
   })
 
   it('shows an empty state when nothing is registered', async () => {

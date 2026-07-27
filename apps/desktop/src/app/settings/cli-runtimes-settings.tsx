@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
+  activateCliAccount,
   addCliAccount,
   type CliAccount,
   deleteCliAccount,
@@ -192,6 +193,23 @@ export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => v
     }
   }
 
+  const activateAccount = async (name: string) => {
+    try {
+      const { model } = await activateCliAccount(name)
+      await refreshAccounts()
+      // Reflect the runtime flip the backend just made, so the toggle above
+      // doesn't keep showing "Off" until the next page load.
+      setRuntimes(current => ({ ...current, model_anthropic_runtime: 'claude_code_sdk' }))
+      onConfigSaved?.()
+      notify({
+        kind: 'info',
+        message: model ? `Using "${name}" — model set to ${model}.` : `Using "${name}".`
+      })
+    } catch (error) {
+      notify({ kind: 'error', message: error instanceof Error ? error.message : 'Could not switch account' })
+    }
+  }
+
   const removeAccount = async (name: string) => {
     try {
       await deleteCliAccount(name)
@@ -282,9 +300,21 @@ export function CliRuntimesSettings({ onConfigSaved }: { onConfigSaved?: () => v
         accounts.map(account => (
           <ListRow
             action={
-              <Button onClick={() => void removeAccount(account.name)} size="sm" variant="ghost">
-                <Trash2 className="size-4" />
-              </Button>
+              <span className="flex items-center gap-1">
+                {account.provider === 'claude_code_sdk' && (
+                  <Button
+                    disabled={account.active}
+                    onClick={() => void activateAccount(account.name)}
+                    size="sm"
+                    variant={account.active ? 'ghost' : 'outline'}
+                  >
+                    {account.active ? 'In use' : 'Use'}
+                  </Button>
+                )}
+                <Button onClick={() => void removeAccount(account.name)} size="sm" variant="ghost">
+                  <Trash2 className="size-4" />
+                </Button>
+              </span>
             }
             description={account.config_dir}
             key={`${account.provider}:${account.name}`}
