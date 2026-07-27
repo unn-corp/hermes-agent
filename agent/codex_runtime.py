@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from agent.stream_single_writer import claim_stream_writer, stream_writer_is_current
 
@@ -612,6 +612,17 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
     return on_event
 
 
+def _resolve_codex_home(agent) -> Optional[str]:
+    """Look up the active cli_accounts config_dir for the "codex" provider,
+    if AIAgent.switch_cli_account() has recorded one via agent.cli_accounts.
+    Returns None when no account has been explicitly selected —
+    CodexAppServerSession then falls back to whichever ~/.codex the codex
+    CLI is already logged into on the host (unchanged default behavior)."""
+    active_accounts = getattr(agent, "_active_cli_accounts", None) or {}
+    account = active_accounts.get("codex")
+    return account.config_dir if account is not None else None
+
+
 def run_codex_app_server_turn(
     agent,
     *,
@@ -679,6 +690,7 @@ def run_codex_app_server_turn(
         # Supersedes the narrower item/started-only bridge from #38835.
         agent._codex_session = CodexAppServerSession(
             cwd=cwd,
+            codex_home=_resolve_codex_home(agent),
             approval_callback=approval_callback,
             request_routing=_ServerRequestRouting(
                 auto_approve_exec=auto_approve_requests,
