@@ -13296,6 +13296,42 @@ def _(rid, params: dict) -> dict:
     return _err(rid, 4002, f"unknown config key: {key}")
 
 
+@method("subagent_transcript.get")
+def _(rid, params: dict) -> dict:
+    """Full transcript detail for one Claude Code Task-tool sub-agent
+    invocation, fetched by Desktop's subagent-task.tsx on expand. Always
+    sourced from the persisted subagent_transcripts table, so it works
+    identically whether the session is still live or was reloaded from
+    history."""
+    session_id = str(params.get("session_id") or "")
+    task_id = str(params.get("task_id") or "")
+    if not session_id or not task_id:
+        return _err(rid, 5701, "session_id and task_id are required")
+
+    db = _get_db()
+    if db is None:
+        return _ok(rid, {"found": False})
+
+    try:
+        row = db.get_subagent_transcript(session_id, task_id)
+    except Exception as e:
+        return _err(rid, 5702, str(e))
+
+    if row is None:
+        return _ok(rid, {"found": False})
+
+    return _ok(rid, {
+        "found": True,
+        "task_id": row["task_id"],
+        "tool_use_id": row.get("tool_use_id"),
+        "description": row.get("description"),
+        "status": row.get("status"),
+        "events": row.get("events", []),
+        "summary": row.get("summary"),
+        "updated_at": row.get("updated_at"),
+    })
+
+
 @method("setup.status")
 def _(rid, params: dict) -> dict:
     try:
