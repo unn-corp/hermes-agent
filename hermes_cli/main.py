@@ -431,6 +431,7 @@ from hermes_cli.subcommands.slack import build_slack_parser
 from hermes_cli.subcommands.login import build_login_parser
 from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.auth import build_auth_parser
+from hermes_cli.subcommands.accounts import build_accounts_parser
 from hermes_cli.subcommands.status import build_status_parser
 from hermes_cli.subcommands.webhook import build_webhook_parser
 from hermes_cli.subcommands.hooks import build_hooks_parser
@@ -4441,6 +4442,13 @@ def cmd_auth(args):
     from hermes_cli.auth_commands import auth_command
 
     auth_command(args)
+
+
+def cmd_accounts(args):
+    """Manage named CLI accounts (codex/claude_code_sdk multi-account registry)."""
+    from hermes_cli.account_commands import accounts_command
+
+    accounts_command(args)
 
 
 def cmd_status(args):
@@ -13840,7 +13848,7 @@ def _build_provider_choices() -> list[str]:
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
+        "acp", "accounts", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
@@ -14593,6 +14601,11 @@ def main():
     # auth command  (parser built in hermes_cli/subcommands/auth.py)
     # =========================================================================
     build_auth_parser(subparsers, cmd_auth=cmd_auth)
+
+    # =========================================================================
+    # accounts command  (parser built in hermes_cli/subcommands/accounts.py)
+    # =========================================================================
+    build_accounts_parser(subparsers, cmd_accounts=cmd_accounts)
 
     # =========================================================================
     # status command  (parser built in hermes_cli/subcommands/status.py)
