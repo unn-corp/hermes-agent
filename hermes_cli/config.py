@@ -8689,6 +8689,11 @@ _OPEN_DICT_TOP_LEVEL_KEYS = frozenset({
     "server_actions",
     "secrets",
     "goals",
+    # Named CLI-account registry (agent/cli_accounts.py) — external CLI
+    # subprocess home directories (CODEX_HOME / CLAUDE_CONFIG_DIR), keyed
+    # by user-chosen account name. Same open-dict shape as mcp_servers:
+    # no DEFAULT_CONFIG entry, users define the inner keys themselves.
+    "cli_accounts",
 })
 
 # Top-level keys whose sub-keys are partially schema-defined (e.g. on a
