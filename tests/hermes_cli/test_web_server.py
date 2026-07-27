@@ -9704,3 +9704,122 @@ class TestDashboardComponentHealth:
         asyncio.run(self.ws._dashboard_selftest_once())
         assert self.ws.DASHBOARD_HEALTH.selftest_status in {"ok", "failing"}
         assert self.ws.DASHBOARD_HEALTH.selftest_http_status is not None
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestModelAnthropicRuntime:
+    """Tests for surfacing model.anthropic_runtime in the settings UI.
+
+    The frontend only ever sees ``model`` as a flat string (see
+    _normalize_config_for_web), so the Claude Code runtime toggle cannot be a
+    ``model.anthropic_runtime`` dot-path field. It rides the same virtual
+    top-level field mechanism model_context_length already uses.
+    """
+
+    def test_schema_exposes_the_runtime_toggle(self):
+        from hermes_cli.web_server import CONFIG_SCHEMA
+
+        assert "model_anthropic_runtime" in CONFIG_SCHEMA
+        entry = CONFIG_SCHEMA["model_anthropic_runtime"]
+        assert entry["type"] == "select"
+        assert entry["options"] == ["auto", "claude_code_sdk"]
+
+    def test_normalize_surfaces_runtime_from_model_dict(self):
+        from hermes_cli.web_server import _normalize_config_for_web
+
+        result = _normalize_config_for_web({
+            "model": {
+                "default": "claude-sonnet-5",
+                "anthropic_runtime": "claude_code_sdk",
+            }
+        })
+        assert result["model"] == "claude-sonnet-5"
+        assert result["model_anthropic_runtime"] == "claude_code_sdk"
+
+    def test_normalize_defaults_to_auto_when_unset(self):
+        from hermes_cli.web_server import _normalize_config_for_web
+
+        assert _normalize_config_for_web(
+            {"model": {"default": "claude-sonnet-5"}}
+        )["model_anthropic_runtime"] == "auto"
+
+    def test_normalize_bare_string_model_yields_auto(self):
+        from hermes_cli.web_server import _normalize_config_for_web
+
+        assert _normalize_config_for_web(
+            {"model": "claude-sonnet-5"}
+        )["model_anthropic_runtime"] == "auto"
+
+    def test_denormalize_writes_runtime_into_model_dict(self):
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import _denormalize_config_from_web
+
+        save_config({"model": {"default": "claude-sonnet-5", "provider": "anthropic"}})
+
+        result = _denormalize_config_from_web({
+            "model": "claude-sonnet-5",
+            "model_anthropic_runtime": "claude_code_sdk",
+        })
+        assert result["model"]["anthropic_runtime"] == "claude_code_sdk"
+        # Unrelated subkeys survive the round trip.
+        assert result["model"]["provider"] == "anthropic"
+        assert "model_anthropic_runtime" not in result  # virtual field removed
+
+    def test_denormalize_auto_removes_the_key(self):
+        """Selecting "auto" must delete the key, not persist the literal
+        string — _maybe_apply_claude_code_sdk_runtime treats any value other
+        than "claude_code_sdk" as off, but leaving "auto" on disk is noise."""
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import _denormalize_config_from_web
+
+        save_config({
+            "model": {
+                "default": "claude-sonnet-5",
+                "anthropic_runtime": "claude_code_sdk",
+            }
+        })
+
+        result = _denormalize_config_from_web({
+            "model": "claude-sonnet-5",
+            "model_anthropic_runtime": "auto",
+        })
+        assert "anthropic_runtime" not in result["model"]
+
+    def test_denormalize_upgrades_bare_string_model_to_dict(self):
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import _denormalize_config_from_web
+
+        save_config({"model": "claude-sonnet-5"})
+
+        result = _denormalize_config_from_web({
+            "model": "claude-sonnet-5",
+            "model_anthropic_runtime": "claude_code_sdk",
+        })
+        assert isinstance(result["model"], dict)
+        assert result["model"]["default"] == "claude-sonnet-5"
+        assert result["model"]["anthropic_runtime"] == "claude_code_sdk"
+
+    def test_round_trip_preserves_an_enabled_runtime(self):
+        """The exact regression that matters: opening Settings and saving any
+        unrelated field must not silently disable the Claude Code runtime."""
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import (
+            _denormalize_config_from_web,
+            _normalize_config_for_web,
+        )
+
+        on_disk = {
+            "model": {
+                "default": "claude-sonnet-5",
+                "provider": "anthropic",
+                "anthropic_runtime": "claude_code_sdk",
+            }
+        }
+        save_config(on_disk)
+
+        shown = _normalize_config_for_web(on_disk)
+        saved = _denormalize_config_from_web(shown)
+
+        assert saved["model"]["anthropic_runtime"] == "claude_code_sdk"

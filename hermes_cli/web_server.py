@@ -807,6 +807,22 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Context window override (0 = auto-detect from model metadata)",
         "category": "general",
     },
+    # Virtual field — the real key is model.anthropic_runtime, but the
+    # frontend only ever sees `model` as a flat string (see
+    # _normalize_config_for_web), so a dot-path field would have nothing to
+    # bind to. Rides the same hoist/write-back path as model_context_length.
+    # Only takes effect when the resolved provider is "anthropic"; inert
+    # otherwise (see _maybe_apply_claude_code_sdk_runtime in runtime_provider).
+    "model_anthropic_runtime": {
+        "type": "select",
+        "options": ["auto", "claude_code_sdk"],
+        "description": (
+            "Anthropic runtime — 'claude_code_sdk' hands each turn to the real "
+            "claude CLI (subscription/OAuth auth, its own tools and sub-agents) "
+            "instead of the Messages API. Requires the claude CLI on PATH."
+        ),
+        "category": "general",
+    },
     "terminal.backend": {
         "type": "select",
         "description": "Terminal execution backend",
@@ -1011,11 +1027,13 @@ CONFIG_SCHEMA = _build_schema_from_config(DEFAULT_CONFIG)
 # by the normalize/denormalize cycle.  Insert model_context_length right after
 # the "model" key so it renders adjacent in the frontend.
 _mcl_entry = _SCHEMA_OVERRIDES["model_context_length"]
+_anthropic_runtime_entry = _SCHEMA_OVERRIDES["model_anthropic_runtime"]
 _ordered_schema: Dict[str, Dict[str, Any]] = {}
 for _k, _v in CONFIG_SCHEMA.items():
     _ordered_schema[_k] = _v
     if _k == "model":
         _ordered_schema["model_context_length"] = _mcl_entry
+        _ordered_schema["model_anthropic_runtime"] = _anthropic_runtime_entry
 CONFIG_SCHEMA = _ordered_schema
 
 
@@ -5245,8 +5263,14 @@ def _normalize_config_for_web(config: Dict[str, Any]) -> Dict[str, Any]:
         ctx_len = model_val.get("context_length", 0)
         config["model"] = model_val.get("default", model_val.get("name", ""))
         config["model_context_length"] = ctx_len if isinstance(ctx_len, int) else 0
+        # Same hoist for the Anthropic runtime toggle. Absent means "auto"
+        # (the default, Messages API) rather than empty, so the select has a
+        # concrete value to render instead of a blank option.
+        runtime = str(model_val.get("anthropic_runtime") or "").strip()
+        config["model_anthropic_runtime"] = runtime or "auto"
     else:
         config["model_context_length"] = 0
+        config["model_anthropic_runtime"] = "auto"
     return config
 
 
@@ -7148,6 +7172,13 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             ctx_override = 0
 
+    # Same for the Anthropic runtime toggle. Sentinel None = the frontend did
+    # not send the field at all, in which case the on-disk value is left
+    # untouched; "auto" is an explicit "turn it off" and deletes the key.
+    runtime_override = config.pop("model_anthropic_runtime", None)
+    if runtime_override is not None:
+        runtime_override = str(runtime_override).strip()
+
     model_val = config.get("model")
     if isinstance(model_val, str) and model_val:
         # Read the current disk config to recover model subkeys
@@ -7187,14 +7218,24 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
                     disk_model["context_length"] = ctx_override
                 else:
                     disk_model.pop("context_length", None)
+                # Same for the runtime toggle ("auto" = remove, so the key
+                # never lingers on disk as a no-op string).
+                if runtime_override is not None:
+                    if runtime_override and runtime_override != "auto":
+                        disk_model["anthropic_runtime"] = runtime_override
+                    else:
+                        disk_model.pop("anthropic_runtime", None)
                 config["model"] = disk_model
-            # Model was previously a bare string — upgrade to dict if
-            # user is setting a context_length override
-            elif ctx_override > 0:
-                config["model"] = {
-                    "default": model_val,
-                    "context_length": ctx_override,
-                }
+            # Model was previously a bare string — upgrade to dict if the user
+            # is setting a context_length override or enabling a runtime
+            elif ctx_override > 0 or (
+                runtime_override and runtime_override != "auto"
+            ):
+                config["model"] = {"default": model_val}
+                if ctx_override > 0:
+                    config["model"]["context_length"] = ctx_override
+                if runtime_override and runtime_override != "auto":
+                    config["model"]["anthropic_runtime"] = runtime_override
         except Exception:
             pass  # can't read disk config — just use the string form
     return config
