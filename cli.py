@@ -8851,6 +8851,29 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if result.success and result.requires_new_session:
             _cprint("    Tip: `/reset` starts a new session immediately.")
 
+    def _handle_cli_account_command(self, cmd_original: str) -> None:
+        """Handle /cli-account — live mid-conversation CLI-account hot-swap.
+
+        Usage:
+            /cli-account                          — list registered accounts
+            /cli-account codex work                — switch codex to "work"
+            /cli-account claude_code_sdk personal  — switch claude_code_sdk to "personal"
+        """
+        from hermes_cli import cli_account_switch as cas
+
+        parts = cmd_original.split(None, 1)
+        raw_args = parts[1].strip() if len(parts) > 1 else ""
+        provider, account_name, errors = cas.parse_args(raw_args)
+        if errors:
+            for err in errors:
+                _cprint(f"❌ {err}")
+            return
+
+        status = cas.apply(self.agent, provider, account_name)
+        prefix = "✓" if status.success else "✗"
+        for line in status.message.splitlines():
+            _cprint(f"  {prefix} {line}")
+
     def _should_handle_model_command_inline(self, text: str, has_images: bool = False) -> bool:
         """Return True when /model should be handled immediately on the UI thread."""
         if not text or has_images or not _looks_like_slash_command(text):
@@ -9179,6 +9202,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_model_switch(cmd_original)
         elif canonical == "codex-runtime":
             self._handle_codex_runtime(cmd_original)
+        elif canonical == "cli-account":
+            self._handle_cli_account_command(cmd_original)
 
         elif canonical == "personality":
             # Use original case (handler lowercases the personality name itself)

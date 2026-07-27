@@ -136,6 +136,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("codex-runtime", "Toggle codex app-server runtime for OpenAI/Codex models",
                "Configuration", aliases=("codex_runtime",),
                args_hint="[auto|codex_app_server]"),
+    CommandDef("cli-account", "Switch the named CLI account for codex/claude_code_sdk mid-conversation",
+               "Configuration", aliases=("cli_account",),
+               args_hint="[provider account-name]"),
 
     CommandDef("personality", "Set a predefined personality", "Configuration",
                args_hint="[name]"),
@@ -1167,7 +1170,11 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #   - moa: high-cost slash mode, available through /hermes moa to avoid
 #     displacing existing native Slack slash commands at the 50-command cap.
 #   - debug: the log/report upload surface; reached via /hermes debug on Slack.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug"})
+#   - cli-account: switches the named codex/claude_code_sdk CLI account for the
+#     current conversation. A rare, machine-local setup action (the accounts
+#     themselves are registered out-of-band via `hermes accounts add`), so it
+#     is reached via /hermes cli-account on Slack.
+_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "cli-account"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
