@@ -222,3 +222,18 @@ def test_run_turn_text_only_turn_projects_single_final_assistant_message():
     assert result.projected_messages == [
         {"role": "assistant", "content": "just a text reply"}
     ]
+
+
+def test_request_interrupt_calls_client_interrupt():
+    fake_client = MagicMock()
+    session = ClaudeCodeSdkTurnSession(client_factory=lambda **kw: fake_client)
+    session.ensure_started()
+
+    session.request_interrupt()
+
+    fake_client.interrupt.assert_called_once()
+
+
+def test_request_interrupt_is_a_noop_before_start():
+    session = ClaudeCodeSdkTurnSession(client_factory=lambda **kw: MagicMock())
+    session.request_interrupt()  # must not raise

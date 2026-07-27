@@ -92,6 +92,15 @@ class ClaudeCodeSdkTurnSession:
                 pass
             self._client = None
 
+    def request_interrupt(self) -> None:
+        """Best-effort interrupt of an in-flight turn. Mirrors
+        CodexAppServerSession.request_interrupt() so AIAgent.interrupt() and
+        switch_cli_account() can treat both transports identically via
+        getattr(session, "request_interrupt", None). Safe to call before a
+        client has started (no-op) or after close() (no-op)."""
+        if self._client is not None:
+            self._client.interrupt()
+
     def run_turn(
         self,
         user_input: str,
