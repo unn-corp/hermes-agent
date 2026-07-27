@@ -77,3 +77,53 @@ def resolve_cli_account(name: str, provider: str) -> Optional["CliAccount"]:
         if account.name == name and account.provider == provider:
             return account
     return None
+
+
+def probe_cli_account(account: "CliAccount") -> tuple[bool, str]:
+    """Best-effort liveness check for a registered account: binary present
+    at an acceptable version, AND config_dir looks like it holds real
+    credentials for that provider. Returns (ok, message) — never raises,
+    mirrors check_codex_binary()/check_claude_binary()'s own (ok, message)
+    contract so callers can print the message directly."""
+    import json
+    import os
+
+    if account.provider == "codex":
+        from agent.transports.codex_app_server import check_codex_binary
+
+        binary_ok, binary_msg = check_codex_binary()
+        if not binary_ok:
+            return False, binary_msg
+        auth_path = os.path.join(account.config_dir, "auth.json")
+        if not os.path.isfile(auth_path):
+            return False, f"no auth.json found under {account.config_dir}"
+        try:
+            with open(auth_path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return False, f"could not read {auth_path}: {exc}"
+        tokens = payload.get("tokens") if isinstance(payload, dict) else None
+        if not isinstance(tokens, dict) or not tokens.get("access_token"):
+            return False, f"{auth_path} has no access_token"
+        return True, f"codex {binary_msg} — {account.config_dir}"
+
+    if account.provider == "claude_code_sdk":
+        from agent.transports.claude_code_sdk import check_claude_binary
+
+        binary_ok, binary_msg = check_claude_binary()
+        if not binary_ok:
+            return False, binary_msg
+        cred_path = os.path.join(account.config_dir, ".credentials.json")
+        if not os.path.isfile(cred_path):
+            return False, f"no .credentials.json found under {account.config_dir}"
+        try:
+            with open(cred_path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return False, f"could not read {cred_path}: {exc}"
+        oauth_data = payload.get("claudeAiOauth") if isinstance(payload, dict) else None
+        if not isinstance(oauth_data, dict) or not oauth_data.get("accessToken"):
+            return False, f"{cred_path} has no accessToken"
+        return True, f"claude {binary_msg} — {account.config_dir}"
+
+    return False, f"unknown provider: {account.provider!r}"
