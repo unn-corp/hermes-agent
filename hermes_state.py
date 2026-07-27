@@ -153,7 +153,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
 # state_meta key ``fts_storage_version``. The main schema version advances
@@ -1134,6 +1134,20 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     delivery_claimed_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS subagent_transcripts (
+    session_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    tool_use_id TEXT,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    events_json TEXT NOT NULL DEFAULT '[]',
+    summary TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (session_id, task_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
@@ -1144,6 +1158,8 @@ CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usag
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);
 CREATE INDEX IF NOT EXISTS idx_async_delegations_delivery
     ON async_delegations(delivery_state, completed_at);
+CREATE INDEX IF NOT EXISTS idx_subagent_transcripts_session
+    ON subagent_transcripts(session_id);
 """
 
 # Indexes that reference columns added in later schema versions must be
@@ -4731,6 +4747,79 @@ class SessionDB:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    def upsert_subagent_transcript(
+        self,
+        session_id: str,
+        task_id: str,
+        *,
+        tool_use_id: Optional[str] = None,
+        description: Optional[str] = None,
+        status: str = "running",
+        events: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
+    ) -> None:
+        """Persist the full ordered sub-agent event history for one
+        Task-tool invocation, keyed by (session_id, task_id) — Hermes' OWN
+        session_id, never Claude's internal one (see the "transcript
+        persistence approach" investigation in
+        docs/plans/2026-07-23-claude-code-cli-subagent-visibility-plan.md).
+
+        Called repeatedly as the sub-agent's lifecycle progresses (start /
+        progress / terminal) by agent/claude_code_runtime.py's event
+        bridge, which already keeps the authoritative ordered event list in
+        memory — each call here replaces events_json/status wholesale with
+        the caller's current full list rather than appending, since the
+        bridge is the single source of truth for ordering.
+
+        tool_use_id/description are only ever sent on the first (start)
+        call; later calls omit them (None) and COALESCE preserves the
+        original value instead of clobbering it with NULL.
+        """
+        now = time.time()
+        events_json = json.dumps(events if events is not None else [], ensure_ascii=False)
+
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO subagent_transcripts (
+                       session_id, task_id, tool_use_id, description, status,
+                       events_json, summary, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (session_id, task_id) DO UPDATE SET
+                       tool_use_id = COALESCE(excluded.tool_use_id, subagent_transcripts.tool_use_id),
+                       description = COALESCE(excluded.description, subagent_transcripts.description),
+                       status = excluded.status,
+                       events_json = excluded.events_json,
+                       summary = COALESCE(excluded.summary, subagent_transcripts.summary),
+                       updated_at = excluded.updated_at""",
+                (
+                    session_id, task_id, tool_use_id, description, status,
+                    events_json, summary, now, now,
+                ),
+            )
+
+        self._execute_write(_do)
+
+    def get_subagent_transcript(self, session_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch one persisted sub-agent transcript. Returns None if never
+        recorded. Works identically whether the session is still live or
+        was reloaded from history, since it's always sourced from this
+        table — used by the subagent_transcript.get RPC in
+        tui_gateway/server.py."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT * FROM subagent_transcripts WHERE session_id = ? AND task_id = ?",
+                (session_id, task_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        try:
+            result["events"] = json.loads(result.pop("events_json") or "[]")
+        except (TypeError, ValueError):
+            result["events"] = []
+        return result
 
     def resolve_session_id(self, session_id_or_prefix: str) -> Optional[str]:
         """Resolve an exact or uniquely prefixed session ID to the full ID.
