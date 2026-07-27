@@ -742,6 +742,41 @@ export function getCustomEndpoints(): Promise<CustomEndpointsResponse> {
   })
 }
 
+export interface CliAccount {
+  name: string
+  provider: 'codex' | 'claude_code_sdk'
+  config_dir: string
+}
+
+/**
+ * Named external-CLI accounts — isolated CODEX_HOME / CLAUDE_CONFIG_DIR
+ * directories the external CLI authenticates itself. Distinct from the pooled
+ * provider credentials the API-keys view manages.
+ */
+export function listCliAccounts(): Promise<{ accounts: CliAccount[] }> {
+  return window.hermesDesktop.api<{ accounts: CliAccount[] }>({
+    ...profileScoped(),
+    path: '/api/cli-accounts'
+  })
+}
+
+export function addCliAccount(account: CliAccount): Promise<{ ok: boolean; probe: string }> {
+  return window.hermesDesktop.api<{ ok: boolean; probe: string }>({
+    ...profileScoped(),
+    path: '/api/cli-accounts',
+    method: 'POST',
+    body: account
+  })
+}
+
+export function deleteCliAccount(name: string): Promise<{ ok: boolean }> {
+  return window.hermesDesktop.api<{ ok: boolean }>({
+    ...profileScoped(),
+    path: `/api/cli-accounts/${encodeURIComponent(name)}`,
+    method: 'DELETE'
+  })
+}
+
 export function saveCustomEndpoint(endpoint: CustomEndpointUpdate): Promise<CustomEndpointsResponse> {
   return window.hermesDesktop.api<CustomEndpointsResponse>({
     path: '/api/providers/custom-endpoints',

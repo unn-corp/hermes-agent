@@ -326,6 +326,7 @@ export const en: Translations = {
       providerAccounts: 'Accounts',
       providerApiKeys: 'API keys',
       providerCustomEndpoints: 'Custom Endpoints',
+      providerCliRuntimes: 'CLI Runtimes',
       gateway: 'Gateway',
       apiKeys: 'Tools & Keys',
       keybinds: 'Keyboard Shortcuts',

@@ -18,6 +18,7 @@ import {
   Package,
   RefreshCw,
   Settings2,
+  Terminal,
   Upload,
   Wrench,
   Zap
@@ -183,6 +184,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
           id: 'pview:custom-endpoints',
           label: t.settings.nav.providerCustomEndpoints,
           onSelect: () => openProviderView('custom-endpoints')
+        },
+        {
+          active: activeView === 'providers' && providerView === 'cli-runtimes',
+          icon: Terminal,
+          id: 'pview:cli-runtimes',
+          label: t.settings.nav.providerCliRuntimes,
+          onSelect: () => openProviderView('cli-runtimes')
         }
       ],
       gapBefore: true,

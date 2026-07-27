@@ -317,6 +317,7 @@ export const zh: Translations = {
       providerAccounts: '账号',
       providerApiKeys: 'API 密钥',
       providerCustomEndpoints: '自定义端点',
+      providerCliRuntimes: 'CLI 运行时',
       gateway: '网关',
       apiKeys: '工具与密钥',
       keybinds: '键盘快捷键',

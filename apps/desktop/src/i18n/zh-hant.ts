@@ -220,6 +220,7 @@ export const zhHant = defineLocale({
       providerAccounts: '帳號',
       providerApiKeys: 'API 金鑰',
       providerCustomEndpoints: '自訂端點',
+      providerCliRuntimes: 'CLI 執行階段',
       gateway: '閘道',
       apiKeys: '工具與金鑰',
       keybinds: '鍵盤快捷鍵',

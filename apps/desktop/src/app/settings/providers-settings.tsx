@@ -24,6 +24,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $desktopOnboarding, startManualLocalEndpoint, startManualProviderOAuth } from '@/store/onboarding'
 import type { EnvVarInfo, OAuthProvider } from '@/types/hermes'
 
+import { CliRuntimesSettings } from './cli-runtimes-settings'
 import { isKeyVar, ProviderKeyRows } from './credential-key-ui'
 import { CustomEndpointsSettings } from './custom-endpoints-settings'
 import { SettingsCategoryHeading, useEnvCredentials } from './env-credentials'
@@ -45,7 +46,7 @@ function GroupLabel({ children }: { children: ReactNode }) {
 }
 
 // Sub-views surfaced as a sidebar subnav: account sign-in vs raw API keys.
-export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints'] as const
+export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints', 'cli-runtimes'] as const
 
 export type ProviderView = (typeof PROVIDER_VIEWS)[number]
 
@@ -492,6 +493,10 @@ export function ProvidersSettings({
 
   if (view === 'custom-endpoints') {
     return <CustomEndpointsSettings onConfigSaved={onConfigSaved} onMainModelChanged={onMainModelChanged} />
+  }
+
+  if (view === 'cli-runtimes') {
+    return <CliRuntimesSettings onConfigSaved={onConfigSaved} />
   }
 
   return (

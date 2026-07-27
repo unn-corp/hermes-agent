@@ -283,6 +283,7 @@ export interface Translations {
       providerAccounts: string
       providerApiKeys: string
       providerCustomEndpoints: string
+      providerCliRuntimes: string
       gateway: string
       apiKeys: string
       keybinds: string

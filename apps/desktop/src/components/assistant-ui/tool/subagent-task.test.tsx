@@ -6,8 +6,8 @@ import { $gateway } from '@/store/gateway'
 import { $activeSessionId } from '@/store/session'
 import { $toolDisclosureStates } from '@/store/tool-view'
 
-import { SubagentTask } from './subagent-task'
 import type { ToolPart } from './fallback-model'
+import { SubagentTask } from './subagent-task'
 
 function args(overrides: Record<string, unknown> = {}) {
   return { task_id: 'task-1', description: 'Investigate flaky test', ...overrides }
@@ -72,6 +72,7 @@ describe('SubagentTask', () => {
 
   it('fetches the full transcript via subagent_transcript.get on expand', async () => {
     $activeSessionId.set('sess-1')
+
     const request = mockGateway({
       found: true,
       task_id: 'task-1',
@@ -100,6 +101,7 @@ describe('SubagentTask', () => {
 
   it('does not re-fetch the transcript on a second expand', async () => {
     $activeSessionId.set('sess-1')
+
     const request = mockGateway({
       found: true,
       task_id: 'task-1',
