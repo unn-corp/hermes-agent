@@ -9823,3 +9823,63 @@ class TestModelAnthropicRuntime:
         saved = _denormalize_config_from_web(shown)
 
         assert saved["model"]["anthropic_runtime"] == "claude_code_sdk"
+
+
+class TestModelOpenaiRuntime:
+    """Codex runtime toggle — exact sibling of TestModelAnthropicRuntime."""
+
+    def test_schema_exposes_the_runtime_toggle(self):
+        from hermes_cli.web_server import CONFIG_SCHEMA
+
+        entry = CONFIG_SCHEMA["model_openai_runtime"]
+        assert entry["type"] == "select"
+        assert entry["options"] == ["auto", "codex_app_server"]
+
+    def test_normalize_surfaces_runtime_from_model_dict(self):
+        from hermes_cli.web_server import _normalize_config_for_web
+
+        result = _normalize_config_for_web({
+            "model": {"default": "gpt-5", "openai_runtime": "codex_app_server"}
+        })
+        assert result["model_openai_runtime"] == "codex_app_server"
+
+    def test_normalize_defaults_to_auto_when_unset(self):
+        from hermes_cli.web_server import _normalize_config_for_web
+
+        assert _normalize_config_for_web({"model": "gpt-5"})["model_openai_runtime"] == "auto"
+
+    def test_denormalize_writes_and_clears(self):
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import _denormalize_config_from_web
+
+        save_config({"model": {"default": "gpt-5", "provider": "openai"}})
+        on = _denormalize_config_from_web({
+            "model": "gpt-5", "model_openai_runtime": "codex_app_server",
+        })
+        assert on["model"]["openai_runtime"] == "codex_app_server"
+
+        save_config({"model": {"default": "gpt-5", "openai_runtime": "codex_app_server"}})
+        off = _denormalize_config_from_web({
+            "model": "gpt-5", "model_openai_runtime": "auto",
+        })
+        assert "openai_runtime" not in off["model"]
+
+    def test_both_runtimes_coexist_independently(self):
+        """Enabling one must not clobber the other — they are separate keys on
+        the same model dict, written by the same denormalize pass."""
+        from hermes_cli.config import save_config
+        from hermes_cli.web_server import _denormalize_config_from_web
+
+        save_config({
+            "model": {
+                "default": "claude-sonnet-5",
+                "anthropic_runtime": "claude_code_sdk",
+            }
+        })
+        result = _denormalize_config_from_web({
+            "model": "claude-sonnet-5",
+            "model_openai_runtime": "codex_app_server",
+            "model_anthropic_runtime": "claude_code_sdk",
+        })
+        assert result["model"]["anthropic_runtime"] == "claude_code_sdk"
+        assert result["model"]["openai_runtime"] == "codex_app_server"

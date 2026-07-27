@@ -56,6 +56,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from hermes_cli import __version__, __release_date__
+from agent.cli_accounts import CliAccount, load_cli_accounts, probe_cli_account
 from hermes_cli.config import (
     cfg_get,
     DEFAULT_CONFIG,
@@ -823,6 +824,16 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         ),
         "category": "general",
     },
+    "model_openai_runtime": {
+        "type": "select",
+        "options": ["auto", "codex_app_server"],
+        "description": (
+            "OpenAI/Codex runtime — 'codex_app_server' hands each turn to a "
+            "`codex app-server` subprocess so terminal/file-ops/patching run "
+            "inside Codex's own runtime. Requires the codex CLI on PATH."
+        ),
+        "category": "general",
+    },
     "terminal.backend": {
         "type": "select",
         "description": "Terminal execution backend",
@@ -1021,19 +1032,29 @@ def _build_schema_from_config(
     return schema
 
 
+# Virtual top-level field -> the model-dict subkey it proxies. The frontend
+# only ever sees `model` as a flat string (see _normalize_config_for_web), so
+# these opt-in CLI runtimes cannot be `model.*` dot-path fields; they are
+# hoisted out of the model dict on read and written back on save, exactly as
+# model_context_length already is.
+_MODEL_RUNTIME_VIRTUAL_FIELDS: Dict[str, str] = {
+    "model_anthropic_runtime": "anthropic_runtime",
+    "model_openai_runtime": "openai_runtime",
+}
+
 CONFIG_SCHEMA = _build_schema_from_config(DEFAULT_CONFIG)
 
 # Inject virtual fields that don't live in DEFAULT_CONFIG but are surfaced
 # by the normalize/denormalize cycle.  Insert model_context_length right after
 # the "model" key so it renders adjacent in the frontend.
 _mcl_entry = _SCHEMA_OVERRIDES["model_context_length"]
-_anthropic_runtime_entry = _SCHEMA_OVERRIDES["model_anthropic_runtime"]
 _ordered_schema: Dict[str, Dict[str, Any]] = {}
 for _k, _v in CONFIG_SCHEMA.items():
     _ordered_schema[_k] = _v
     if _k == "model":
         _ordered_schema["model_context_length"] = _mcl_entry
-        _ordered_schema["model_anthropic_runtime"] = _anthropic_runtime_entry
+        for _rt_key in _MODEL_RUNTIME_VIRTUAL_FIELDS:
+            _ordered_schema[_rt_key] = _SCHEMA_OVERRIDES[_rt_key]
 CONFIG_SCHEMA = _ordered_schema
 
 
@@ -5263,14 +5284,15 @@ def _normalize_config_for_web(config: Dict[str, Any]) -> Dict[str, Any]:
         ctx_len = model_val.get("context_length", 0)
         config["model"] = model_val.get("default", model_val.get("name", ""))
         config["model_context_length"] = ctx_len if isinstance(ctx_len, int) else 0
-        # Same hoist for the Anthropic runtime toggle. Absent means "auto"
-        # (the default, Messages API) rather than empty, so the select has a
-        # concrete value to render instead of a blank option.
-        runtime = str(model_val.get("anthropic_runtime") or "").strip()
-        config["model_anthropic_runtime"] = runtime or "auto"
+        # Same hoist for the opt-in CLI runtime toggles. Absent means "auto"
+        # (the default) rather than empty, so each select has a concrete value
+        # to render instead of a blank option.
+        for _virtual, _subkey in _MODEL_RUNTIME_VIRTUAL_FIELDS.items():
+            config[_virtual] = str(model_val.get(_subkey) or "").strip() or "auto"
     else:
         config["model_context_length"] = 0
-        config["model_anthropic_runtime"] = "auto"
+        for _virtual in _MODEL_RUNTIME_VIRTUAL_FIELDS:
+            config[_virtual] = "auto"
     return config
 
 
@@ -6472,6 +6494,89 @@ async def get_defaults():
     return DEFAULT_CONFIG
 
 
+_VALID_CLI_ACCOUNT_PROVIDERS = ("codex", "claude_code_sdk")
+
+
+class CliAccountCreate(BaseModel):
+    name: str
+    provider: str
+    config_dir: str
+    profile: Optional[str] = None
+
+
+@app.get("/api/cli-accounts")
+async def list_cli_accounts_endpoint(
+    provider: Optional[str] = None, profile: Optional[str] = None
+):
+    """Named external-CLI accounts (isolated CODEX_HOME / CLAUDE_CONFIG_DIR).
+
+    Backs the Providers → CLI Runtimes panel. Distinct from the pooled
+    provider credentials `/api/env` manages: these are home directories that
+    the external CLI owns and authenticates itself, so Hermes only records
+    where they live.
+    """
+    with _config_profile_scope(profile):
+        accounts = load_cli_accounts()
+    wanted = str(provider or "").strip().lower()
+    if wanted:
+        accounts = [a for a in accounts if a.provider == wanted]
+    return {
+        "accounts": [
+            {"name": a.name, "provider": a.provider, "config_dir": a.config_dir}
+            for a in accounts
+        ]
+    }
+
+
+@app.post("/api/cli-accounts")
+async def add_cli_account_endpoint(body: CliAccountCreate, profile: Optional[str] = None):
+    """Register an account, probing before persisting.
+
+    Mirrors `hermes accounts add`: the binary must be present at an acceptable
+    version AND the directory must hold real credentials, so a path that was
+    never logged into is rejected up front rather than failing on the next turn.
+    """
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Account name is required.")
+    provider = str(body.provider or "").strip().lower()
+    if provider not in _VALID_CLI_ACCOUNT_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown provider {body.provider!r}. Use one of: "
+                f"{', '.join(_VALID_CLI_ACCOUNT_PROVIDERS)}"
+            ),
+        )
+    config_dir = str(body.config_dir or "").strip()
+    if not config_dir:
+        raise HTTPException(status_code=400, detail="config_dir is required.")
+
+    account = CliAccount(name=name, provider=provider, config_dir=config_dir)
+    ok, message = probe_cli_account(account)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    with _config_profile_scope(body.profile or profile):
+        config = load_config()
+        accounts = config.setdefault("cli_accounts", {})
+        accounts[name] = {"provider": provider, "config_dir": config_dir}
+        save_config(config)
+    return {"ok": True, "probe": message}
+
+
+@app.delete("/api/cli-accounts/{name}")
+async def delete_cli_account_endpoint(name: str, profile: Optional[str] = None):
+    with _config_profile_scope(profile):
+        config = load_config()
+        accounts = config.get("cli_accounts")
+        if not isinstance(accounts, dict) or name not in accounts:
+            raise HTTPException(status_code=404, detail=f'No cli account named "{name}".')
+        accounts.pop(name)
+        save_config(config)
+    return {"ok": True}
+
+
 @app.get("/api/config/schema")
 async def get_schema(profile: Optional[str] = None):
     # Discovery-driven provider options (voice command providers + memory
@@ -7172,12 +7277,16 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             ctx_override = 0
 
-    # Same for the Anthropic runtime toggle. Sentinel None = the frontend did
-    # not send the field at all, in which case the on-disk value is left
-    # untouched; "auto" is an explicit "turn it off" and deletes the key.
-    runtime_override = config.pop("model_anthropic_runtime", None)
-    if runtime_override is not None:
-        runtime_override = str(runtime_override).strip()
+    # Same for the CLI runtime toggles. Sentinel None = the frontend did not
+    # send the field at all, in which case the on-disk value is left untouched;
+    # "auto" is an explicit "turn it off" and deletes the key.
+    runtime_overrides: Dict[str, Optional[str]] = {}
+    for _virtual, _subkey in _MODEL_RUNTIME_VIRTUAL_FIELDS.items():
+        _raw = config.pop(_virtual, None)
+        runtime_overrides[_subkey] = None if _raw is None else str(_raw).strip()
+    _has_runtime_enable = any(
+        v and v != "auto" for v in runtime_overrides.values()
+    )
 
     model_val = config.get("model")
     if isinstance(model_val, str) and model_val:
@@ -7218,24 +7327,25 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
                     disk_model["context_length"] = ctx_override
                 else:
                     disk_model.pop("context_length", None)
-                # Same for the runtime toggle ("auto" = remove, so the key
+                # Same for the runtime toggles ("auto" = remove, so the key
                 # never lingers on disk as a no-op string).
-                if runtime_override is not None:
-                    if runtime_override and runtime_override != "auto":
-                        disk_model["anthropic_runtime"] = runtime_override
+                for _subkey, _value in runtime_overrides.items():
+                    if _value is None:
+                        continue
+                    if _value and _value != "auto":
+                        disk_model[_subkey] = _value
                     else:
-                        disk_model.pop("anthropic_runtime", None)
+                        disk_model.pop(_subkey, None)
                 config["model"] = disk_model
             # Model was previously a bare string — upgrade to dict if the user
             # is setting a context_length override or enabling a runtime
-            elif ctx_override > 0 or (
-                runtime_override and runtime_override != "auto"
-            ):
+            elif ctx_override > 0 or _has_runtime_enable:
                 config["model"] = {"default": model_val}
                 if ctx_override > 0:
                     config["model"]["context_length"] = ctx_override
-                if runtime_override and runtime_override != "auto":
-                    config["model"]["anthropic_runtime"] = runtime_override
+                for _subkey, _value in runtime_overrides.items():
+                    if _value and _value != "auto":
+                        config["model"][_subkey] = _value
         except Exception:
             pass  # can't read disk config — just use the string form
     return config
