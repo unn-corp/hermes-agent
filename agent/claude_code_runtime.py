@@ -11,6 +11,7 @@ Includes the lazy session lifecycle, dispatch path, event bridging
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
@@ -252,8 +253,182 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
     # re-deriving them.
     started: dict[str, tuple[str, dict]] = {}
 
+    # --- Phase 3: sub-agent (Task tool) visibility state -----------------
+    # tool_use_id of the parent turn's "Task" ToolUseBlock -> task_id, once
+    # TaskStartedMessage correlates the two (both reference the same
+    # tool_use_id).
+    tool_use_id_to_task_id: dict[str, str] = {}
+    # task_id -> mutable transcript state, accumulated as the sub-agent's
+    # own AssistantMessage content streams in and mirrored to
+    # subagent_transcripts on every change.
+    subagent_state: dict[str, dict[str, Any]] = {}
+    # tool_use_id of every ToolUseBlock in the PARENT turn whose name is
+    # "Task" — used to suppress the generic tool.started/tool.completed
+    # bubble for the Task invocation itself, since the dedicated
+    # claude_subagent_task bubble replaces it rather than duplicating it.
+    task_tool_use_ids: set[str] = set()
+
+    # Local mirror of the SDK's own TERMINAL_TASK_STATUSES — deliberately
+    # not imported, so this module stays importable with claude-agent-sdk
+    # uninstalled (the lazy-import rule Phase 1 established).
+    _TERMINAL_TASK_STATUSES = {"completed", "failed", "stopped", "killed"}
+
+    def _persist_subagent_transcript(task_id: str) -> None:
+        state = subagent_state.get(task_id)
+        if state is None:
+            return
+        session_id = getattr(agent, "session_id", None)
+        db = getattr(agent, "_session_db", None)
+        if not db or not session_id:
+            return
+        try:
+            if not agent._session_db_created:
+                agent._ensure_db_session()
+            db.upsert_subagent_transcript(
+                session_id,
+                task_id,
+                tool_use_id=state.get("tool_use_id"),
+                description=state.get("description"),
+                status=state.get("status", "running"),
+                events=state.get("events", []),
+                summary=state.get("summary"),
+            )
+        except Exception:
+            logger.debug(
+                "claude code sdk: subagent transcript persistence failed "
+                "(task_id=%s)", task_id, exc_info=True,
+            )
+
+    def _finish_task(task_id: str, state: dict) -> None:
+        _persist_subagent_transcript(task_id)
+        is_error = state.get("status") in {"failed", "stopped", "killed"}
+        cb = getattr(agent, "tool_complete_callback", None)
+        if cb is not None:
+            result_payload = {
+                "task_id": task_id,
+                "status": state.get("status"),
+                "summary": state.get("summary") or "",
+                "is_error": is_error,
+            }
+            try:
+                cb(
+                    task_id,
+                    "claude_subagent_task",
+                    {"task_id": task_id, "description": state.get("description", "")},
+                    json.dumps(result_payload, ensure_ascii=False)[:4000],
+                )
+            except Exception:
+                logger.debug(
+                    "tool_complete_callback raised on claude_subagent_task "
+                    "completion for %s", task_id, exc_info=True,
+                )
+        tool_use_id = state.get("tool_use_id")
+        if tool_use_id:
+            tool_use_id_to_task_id.pop(tool_use_id, None)
+
+    def _handle_task_message(message_type: str, message) -> None:
+        task_id = getattr(message, "task_id", None)
+        if not task_id:
+            return
+
+        if message_type == "TaskStartedMessage":
+            tool_use_id = getattr(message, "tool_use_id", None)
+            description = getattr(message, "description", "") or ""
+            if tool_use_id:
+                tool_use_id_to_task_id[tool_use_id] = task_id
+            subagent_state[task_id] = {
+                "tool_use_id": tool_use_id,
+                "description": description,
+                "status": "running",
+                "events": [],
+                "summary": None,
+            }
+            cb = getattr(agent, "tool_start_callback", None)
+            if cb is not None:
+                try:
+                    cb(
+                        task_id,
+                        "claude_subagent_task",
+                        {"task_id": task_id, "description": description},
+                    )
+                except Exception:
+                    logger.debug(
+                        "tool_start_callback raised on claude_subagent_task "
+                        "start for %s", task_id, exc_info=True,
+                    )
+            _persist_subagent_transcript(task_id)
+            return
+
+        state = subagent_state.setdefault(task_id, {
+            "tool_use_id": None, "description": "", "status": "running",
+            "events": [], "summary": None,
+        })
+
+        if message_type == "TaskProgressMessage":
+            state["status"] = "running"
+            _persist_subagent_transcript(task_id)
+            return
+
+        if message_type == "TaskUpdatedMessage":
+            status = getattr(message, "status", None)
+            if status:
+                state["status"] = status
+            if status not in _TERMINAL_TASK_STATUSES:
+                _persist_subagent_transcript(task_id)
+                return
+            # Terminal via TaskUpdatedMessage (e.g. a killed background task
+            # with no accompanying TaskNotificationMessage).
+            state["summary"] = state.get("summary") or f"task {status}"
+            _finish_task(task_id, state)
+            return
+
+        if message_type == "TaskNotificationMessage":
+            status = getattr(message, "status", None) or "completed"
+            state["status"] = status
+            state["summary"] = getattr(message, "summary", "") or ""
+            _finish_task(task_id, state)
+            return
+
+    def _project_subagent_block(block) -> Optional[dict]:
+        """Project one content block from a sub-agent's own AssistantMessage
+        into the lightweight dict shape persisted in subagent_transcripts —
+        mirrors the top-level callback payload shapes (name/input for
+        tool_use, content/is_error for tool_result, text for plain text)
+        without touching any top-level UI callback."""
+        block_type = type(block).__name__
+        if block_type == "TextBlock":
+            text = getattr(block, "text", "")
+            if isinstance(text, str) and text:
+                return {"type": "text", "text": text}
+            return None
+        if block_type == "ToolUseBlock":
+            return {
+                "type": "tool_use",
+                "name": getattr(block, "name", ""),
+                "input": block.input if isinstance(block.input, dict) else {},
+            }
+        if block_type == "ToolResultBlock":
+            content = block.content
+            if isinstance(content, list):
+                content = "\n".join(
+                    str(part.get("text", part)) if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            return {
+                "type": "tool_result",
+                "is_error": bool(getattr(block, "is_error", False)),
+                "content": content,
+            }
+        return None
+
     def _fire_tool_started(block) -> None:
         name = block.name
+        if name == "Task":
+            # Suppressed — the dedicated claude_subagent_task bubble (fired
+            # from TaskStartedMessage) replaces this entirely rather than
+            # duplicating it.
+            task_tool_use_ids.add(block.id)
+            return
         args = block.input if isinstance(block.input, dict) else {}
         started[block.id] = (name, args)
         preview = None
@@ -286,6 +461,12 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
                 )
 
     def _fire_tool_completed(block) -> None:
+        if block.tool_use_id in task_tool_use_ids:
+            # Suppressed — the dedicated claude_subagent_task bubble's
+            # terminal state comes from TaskNotificationMessage /
+            # TaskUpdatedMessage, not from this ToolResultBlock.
+            task_tool_use_ids.discard(block.tool_use_id)
+            return
         prior = started.pop(block.tool_use_id, None)
         name = prior[0] if prior is not None else "unknown"
         args = prior[1] if prior is not None else {}
@@ -328,6 +509,35 @@ def make_claude_code_sdk_event_bridge(agent) -> Callable[[dict], None]:
         if not isinstance(event, dict) or event.get("type") != "raw_message":
             return
         message = event.get("message")
+        message_type = type(message).__name__
+
+        if message_type in {
+            "TaskStartedMessage", "TaskProgressMessage",
+            "TaskUpdatedMessage", "TaskNotificationMessage",
+        }:
+            _handle_task_message(message_type, message)
+            return
+
+        # A sub-agent's own AssistantMessages stream through this same
+        # iterator, tagged with the parent Task invocation's tool_use_id.
+        # They belong in the persisted transcript only — never in the
+        # top-level stream or as top-level tool cards.
+        parent_tool_use_id = getattr(message, "parent_tool_use_id", None)
+        if parent_tool_use_id and parent_tool_use_id in tool_use_id_to_task_id:
+            task_id = tool_use_id_to_task_id[parent_tool_use_id]
+            content = getattr(message, "content", None)
+            if isinstance(content, list):
+                state = subagent_state.setdefault(task_id, {
+                    "tool_use_id": parent_tool_use_id, "description": "",
+                    "status": "running", "events": [], "summary": None,
+                })
+                for block in content:
+                    projected = _project_subagent_block(block)
+                    if projected is not None:
+                        state["events"].append(projected)
+                _persist_subagent_transcript(task_id)
+            return
+
         content = getattr(message, "content", None)
         if not isinstance(content, list):
             return
