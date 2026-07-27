@@ -94,7 +94,7 @@ def test_resolve_cli_account_matches_name_and_provider(monkeypatch):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_cli_accounts.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_cli_accounts.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent.cli_accounts'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -184,7 +184,7 @@ def resolve_cli_account(name: str, provider: str) -> Optional["CliAccount"]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_cli_accounts.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_cli_accounts.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Commit**
@@ -250,7 +250,7 @@ to:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd hermes-agent && python -m pytest "tests/hermes_cli/test_set_config_value.py::TestValidateConfigKey::test_known_keys_pass[cli_accounts.work.provider]" -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh "tests/hermes_cli/test_set_config_value.py::TestValidateConfigKey::test_known_keys_pass[cli_accounts.work.provider]" -v`
 Expected: FAIL — `assert is_known` fails because `cli_accounts` is not yet in `_known_top_level_keys()`.
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -300,12 +300,12 @@ _OPEN_DICT_TOP_LEVEL_KEYS = frozenset({
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd hermes-agent && python -m pytest "tests/hermes_cli/test_set_config_value.py::TestValidateConfigKey::test_known_keys_pass[cli_accounts.work.provider]" -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh "tests/hermes_cli/test_set_config_value.py::TestValidateConfigKey::test_known_keys_pass[cli_accounts.work.provider]" -v`
 Expected: PASS
 
 - [ ] **Step 5: Run the whole file to confirm no regressions**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_set_config_value.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_set_config_value.py -v`
 Expected: PASS (all tests, no regressions)
 
 - [ ] **Step 6: Commit**
@@ -402,7 +402,7 @@ def test_probe_claude_code_sdk_account_fails_when_credentials_missing(monkeypatc
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_cli_accounts.py -v -k probe`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_cli_accounts.py -v -k probe`
 Expected: FAIL with `ImportError: cannot import name 'probe_cli_account'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -462,7 +462,7 @@ def probe_cli_account(account: "CliAccount") -> tuple[bool, str]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_cli_accounts.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_cli_accounts.py -v`
 Expected: PASS (9 tests total)
 
 - [ ] **Step 5: Commit**
@@ -594,7 +594,7 @@ def test_accounts_command_prints_usage_when_no_action(capsys):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_account_commands.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_account_commands.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'hermes_cli.account_commands'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -724,7 +724,7 @@ def accounts_command(args) -> None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_account_commands.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_account_commands.py -v`
 Expected: PASS (10 tests)
 
 - [ ] **Step 5: Commit**
@@ -820,7 +820,7 @@ def test_accounts_add_rejects_unknown_provider():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_subcommands_accounts.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_subcommands_accounts.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'hermes_cli.subcommands.accounts'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -885,7 +885,7 @@ def build_accounts_parser(subparsers, *, cmd_accounts: Callable) -> None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_subcommands_accounts.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_subcommands_accounts.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Wire into `hermes_cli/main.py`**
@@ -985,7 +985,7 @@ def test_request_interrupt_is_a_noop_before_start():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_session.py -v -k request_interrupt`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_session.py -v -k request_interrupt`
 Expected: FAIL with `AttributeError: 'ClaudeCodeSdkTurnSession' object has no attribute 'request_interrupt'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1016,7 +1016,7 @@ Edit `hermes-agent/agent/transports/claude_code_sdk_session.py`, adding immediat
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/transports/test_claude_code_sdk_session.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/transports/test_claude_code_sdk_session.py -v`
 Expected: PASS (all tests in the file, including the 2 new ones)
 
 - [ ] **Step 5: Commit**
@@ -1143,7 +1143,7 @@ def test_interrupt_calls_claude_code_session_request_interrupt():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/run_agent/test_switch_cli_account.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/run_agent/test_switch_cli_account.py -v`
 Expected: FAIL with `AttributeError: 'AIAgent' object has no attribute 'switch_cli_account'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1244,12 +1244,12 @@ Then, immediately after `_run_codex_app_server_turn` (currently ending right bef
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/run_agent/test_switch_cli_account.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/run_agent/test_switch_cli_account.py -v`
 Expected: PASS (6 tests)
 
 - [ ] **Step 5: Run the existing interrupt-propagation regression suite to confirm no regressions**
 
-Run: `cd hermes-agent && python -m pytest tests/run_agent/test_interrupt_propagation.py tests/run_agent/test_concurrent_interrupt.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/run_agent/test_interrupt_propagation.py tests/run_agent/test_concurrent_interrupt.py -v`
 Expected: PASS (no regressions from the new `interrupt()` branch)
 
 - [ ] **Step 6: Commit**
@@ -1385,7 +1385,7 @@ def test_run_codex_app_server_turn_passes_none_codex_home_by_default(monkeypatch
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_codex_runtime_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_codex_runtime_account_switch.py -v`
 Expected: FAIL with `ImportError: cannot import name '_resolve_codex_home'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1447,12 +1447,12 @@ to:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_codex_runtime_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_codex_runtime_account_switch.py -v`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Run the existing Codex app-server integration suite to confirm no regressions**
 
-Run: `cd hermes-agent && python -m pytest tests/run_agent/test_codex_app_server_integration.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/run_agent/test_codex_app_server_integration.py -v`
 Expected: PASS (no regressions — `codex_home=None` is the same effective behavior as omitting the kwarg, since `CodexAppServerSession.__init__`'s default is already `codex_home: Optional[str] = None`)
 
 - [ ] **Step 6: Commit**
@@ -1553,7 +1553,7 @@ def test_run_claude_code_sdk_turn_threads_claude_config_dir_from_active_account(
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_account_switch.py -v`
 Expected: FAIL with `ImportError: cannot import name '_resolve_claude_code_config_dir'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1609,7 +1609,7 @@ change it to:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/agent/test_claude_code_runtime_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/agent/test_claude_code_runtime_account_switch.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Run the full Phase 1 claude_code_sdk suite to confirm no regressions**
@@ -1617,7 +1617,7 @@ Expected: PASS (4 tests)
 Run:
 ```bash
 cd hermes-agent
-python -m pytest \
+./scripts/run_tests.sh \
   tests/agent/test_claude_code_runtime_dispatch.py \
   tests/agent/test_claude_code_sdk_event_bridge.py \
   tests/agent/transports/test_claude_code_sdk_session.py \
@@ -1718,7 +1718,7 @@ class TestApply:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_cli_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_cli_account_switch.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'hermes_cli.cli_account_switch'`
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -1826,7 +1826,7 @@ def apply(agent, provider: Optional[str], account_name: Optional[str]) -> CliAcc
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_cli_account_switch.py -v`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_cli_account_switch.py -v`
 Expected: PASS (10 tests)
 
 - [ ] **Step 5: Register the `CommandDef`**
@@ -1864,7 +1864,7 @@ def test_cli_account_command_resolves():
     assert resolve_command("cli_account").name == "cli-account"
 ```
 
-Run: `cd hermes-agent && python -m pytest tests/hermes_cli/test_commands.py -v -k cli_account`
+Run: `cd hermes-agent && ./scripts/run_tests.sh tests/hermes_cli/test_commands.py -v -k cli_account`
 Expected: PASS (1 test)
 
 - [ ] **Step 7: Wire the CLI handler and dispatch branch**
@@ -1926,7 +1926,7 @@ Expected: No output, exit code 0
 Run:
 ```bash
 cd hermes-agent
-python -m pytest \
+./scripts/run_tests.sh \
   tests/agent/test_cli_accounts.py \
   tests/hermes_cli/test_account_commands.py \
   tests/hermes_cli/test_subcommands_accounts.py \
