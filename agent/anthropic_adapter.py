@@ -2412,6 +2412,12 @@ def _evict_old_screenshots(result: List[Dict[str, Any]]) -> None:
                 ]
 
 
+# Non-whitespace stand-in for text Anthropic would reject. Same value and
+# purpose as bedrock_adapter._EMPTY_TEXT_PLACEHOLDER — kept as a local constant
+# rather than imported so the two adapters stay independently readable.
+_EMPTY_TEXT_PLACEHOLDER = "(empty)"
+
+
 def _ensure_leading_user_turn(result: List[Dict[str, Any]]) -> None:
     """Anthropic requires messages[0] to have role=user.
 
@@ -2427,7 +2433,64 @@ def _ensure_leading_user_turn(result: List[Dict[str, Any]]) -> None:
     (convert_messages_to_converse).
     """
     if result and result[0].get("role") != "user":
-        result.insert(0, {"role": "user", "content": [{"type": "text", "text": " "}]})
+        # The placeholder MUST be non-whitespace. A single space here made this
+        # repair trade one HTTP 400 for another: Anthropic rejects whitespace-
+        # only blocks with "messages: text content blocks must contain
+        # non-whitespace text", so any history needing this fix-up failed every
+        # turn instead — permanently wedging a session that had been compacted
+        # twice. Bedrock Converse tolerates " "; the Messages API does not.
+        result.insert(0, {"role": "user", "content": [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]})
+
+
+def _sanitize_empty_text_blocks(messages: List[Dict]) -> None:
+    """Make every text block non-whitespace, in place.
+
+    Anthropic rejects whitespace-only text outright::
+
+        HTTP 400 messages: text content blocks must contain non-whitespace text
+
+    A tool-call-only assistant turn is persisted with empty content — valid for
+    OpenAI-style APIs and tolerated by aggregators — so any history containing
+    one 400s the entire turn when replayed against Anthropic, making an old
+    session permanently unusable on Claude.
+
+    Two cases, deliberately handled differently:
+
+    - The message has other blocks (the tool-call turn above): DROP the empty
+      text. A bare tool_use turn is the natural Anthropic shape, and injecting
+      filler text there is noise the model would read.
+    - Dropping would leave the message with nothing: substitute the placeholder
+      instead. ``content: []`` is rejected too, and removing the message
+      outright would break the user/assistant alternation the later passes have
+      to preserve.
+
+    Mirrors ``bedrock_adapter._safe_text`` / ``_EMPTY_TEXT_PLACEHOLDER``, which
+    solved the same problem for Converse.
+    """
+    for message in messages:
+        content = message.get("content")
+
+        if isinstance(content, str):
+            if not content.strip():
+                message["content"] = _EMPTY_TEXT_PLACEHOLDER
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        kept = [
+            b
+            for b in content
+            if not (
+                isinstance(b, dict)
+                and b.get("type") == "text"
+                and not str(b.get("text", "")).strip()
+            )
+        ]
+        if kept:
+            message["content"] = kept
+        else:
+            message["content"] = [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
 
 
 def convert_messages_to_anthropic(
@@ -2486,6 +2549,7 @@ def convert_messages_to_anthropic(
         # Regular user message
         result.append(_convert_user_message(content))
 
+    _sanitize_empty_text_blocks(result)
     _strip_orphaned_tool_blocks(result)
     result = _merge_consecutive_roles(result)
     _ensure_leading_user_turn(result)

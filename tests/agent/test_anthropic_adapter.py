@@ -1394,7 +1394,10 @@ class TestConvertMessages:
 
         assert system == "You are helpful."
         assert result[0]["role"] == "user"
-        assert result[0]["content"] == [{"type": "text", "text": " "}]
+        # Placeholder must be NON-whitespace: Anthropic rejects whitespace-only
+        # blocks ("text content blocks must contain non-whitespace text"), so the
+        # old " " turned this 400-avoidance repair into a guaranteed 400.
+        assert result[0]["content"] == [{"type": "text", "text": "(empty)"}]
         assert result[1]["role"] == "assistant"
         assert any(
             m["role"] == "assistant" and "Context compaction summary" in str(m["content"])
@@ -1418,7 +1421,10 @@ class TestConvertMessages:
 
         assert system is None
         assert result[0]["role"] == "user"
-        assert result[0]["content"] == [{"type": "text", "text": " "}]
+        # Placeholder must be NON-whitespace: Anthropic rejects whitespace-only
+        # blocks ("text content blocks must contain non-whitespace text"), so the
+        # old " " turned this 400-avoidance repair into a guaranteed 400.
+        assert result[0]["content"] == [{"type": "text", "text": "(empty)"}]
         assert result[1]["role"] == "assistant"
         assert "Context compaction summary" in str(result[1]["content"])
 
@@ -2634,3 +2640,78 @@ class TestConvertToolsToAnthropicDedup:
 
     def test_none_tools_returns_empty(self):
         assert convert_tools_to_anthropic(None) == []
+
+
+class TestEmptyTextBlocksAreDropped:
+    """Anthropic rejects empty text blocks outright:
+
+        HTTP 400 messages: text content blocks must contain non-whitespace text
+
+    Tool-call-only assistant turns are persisted with empty content, which is
+    valid for OpenAI-style APIs and tolerated by aggregators. Replaying that
+    history against Anthropic 400s the whole turn, so an old session becomes
+    permanently unusable on Claude until the blocks are stripped.
+    """
+
+    def test_assistant_tool_call_keeps_tools_and_drops_the_empty_text(self):
+        _, result = convert_messages_to_anthropic([
+            {"role": "user", "content": "run it"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "bash", "arguments": '{"command": "ls"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ])
+        assistant = [m for m in result if m["role"] == "assistant"]
+        assert assistant, "assistant turn must survive"
+        blocks = assistant[0]["content"]
+        assert any(b.get("type") == "tool_use" for b in blocks)
+        assert not any(
+            b.get("type") == "text" and not str(b.get("text", "")).strip() for b in blocks
+        )
+
+    def test_whitespace_only_text_is_dropped(self):
+        _, result = convert_messages_to_anthropic([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "   \n\t "},
+            {"role": "user", "content": "still here?"},
+        ])
+        for message in result:
+            content = message["content"]
+            if isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text":
+                        assert str(block.get("text", "")).strip()
+
+    def test_real_text_is_untouched(self):
+        _, result = convert_messages_to_anthropic([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello there"},
+        ])
+        texts = [
+            b.get("text")
+            for m in result
+            for b in (m["content"] if isinstance(m["content"], list) else [])
+            if b.get("type") == "text"
+        ]
+        assert "hello there" in texts
+
+    def test_no_message_is_left_with_zero_blocks(self):
+        """content: [] is rejected too, and deleting the message would break
+        the alternation later passes rely on — so substitute a placeholder."""
+        _, result = convert_messages_to_anthropic([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "again"},
+        ])
+        for message in result:
+            content = message["content"]
+            assert not (isinstance(content, list) and len(content) == 0)
+            if isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text":
+                        assert str(block.get("text", "")).strip()
