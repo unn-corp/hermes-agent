@@ -734,6 +734,26 @@ def run_claude_code_sdk_turn(
     if turn.projected_messages:
         messages.extend(turn.projected_messages)
 
+        # Persist the newly-projected assistant/tool messages ourselves, for
+        # exactly the reason run_codex_app_server_turn does: this is an early
+        # return that bypasses conversation_loop, whose normal per-step
+        # _persist_session() calls would otherwise flush them. Without this the
+        # turn streams to the UI and is never written — reopening the session
+        # shows the user's messages with every assistant reply missing.
+        #
+        # The inbound user turn was already flushed at turn start
+        # (turn_context.py _persist_session) and _flush_messages_to_session_db
+        # dedups via the intrinsic _DB_PERSISTED_MARKER, so this writes ONLY
+        # the new projected rows and does not re-INSERT the user turn.
+        if getattr(agent, "_session_db", None) is not None:
+            try:
+                agent._flush_messages_to_session_db(messages)
+            except Exception:
+                logger.debug(
+                    "claude code sdk projected-message flush failed",
+                    exc_info=True,
+                )
+
     # Mirror run_codex_app_server_turn's interrupt handoff: only a
     # user-driven interrupt (Ctrl+C / explicit stop) should surface as
     # "interrupted" to the caller. A turn.interrupted that was NOT paired
@@ -760,13 +780,20 @@ def run_claude_code_sdk_turn(
         "completed": not turn.interrupted and turn.error is None,
         "partial": turn.interrupted or turn.error is not None,
         "interrupted": _user_interrupted,
+        # We flushed the projected rows above and turn_context._persist_session
+        # already wrote the inbound user turn, so tell the gateway to skip its
+        # own append_to_transcript DB write — append_message is a raw INSERT
+        # with no dedup, so writing again there would duplicate the user turn
+        # (the #860 / #42039 bug). Conditioned on the agent actually having a
+        # session DB: with no DB the agent persisted nothing and the gateway
+        # must remain the writer.
+        "agent_persisted": getattr(agent, "_session_db", None) is not None,
         **(
             {"interrupt_message": _interrupt_message}
             if _interrupt_message
             else {}
         ),
         "error": turn.error,
-        "agent_persisted": False,
         **usage_result,
     }
 

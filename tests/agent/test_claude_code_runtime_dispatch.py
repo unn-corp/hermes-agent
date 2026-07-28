@@ -168,3 +168,101 @@ def test_aiagent_forwarder_delegates_to_run_claude_code_sdk_turn(monkeypatch):
     )
     assert result["final_response"] == "ok"
     assert called["kwargs"]["user_message"] == "hi"
+
+
+# --- Transcript persistence ----------------------------------------------
+#
+# This runtime is an EARLY RETURN out of run_conversation, so it never reaches
+# the loop's per-step agent._persist_session() calls. Phase 1 projected the
+# assistant turn into `messages` but never wrote it, so every reply streamed
+# live and then vanished: reopening a Claude Code session showed the user's
+# messages with all assistant replies missing. run_codex_app_server_turn
+# flushes for exactly this reason; these tests pin the same contract here.
+
+
+def _turn_with(projected):
+    return MagicMock(
+        final_text="hi",
+        interrupted=False,
+        error=None,
+        should_retire=False,
+        projected_messages=projected,
+        tool_iterations=0,
+    )
+
+
+def _run(agent, projected, messages=None):
+    fake_session = MagicMock()
+    fake_session.run_turn.return_value = _turn_with(projected)
+    agent._claude_code_session = fake_session
+    return run_claude_code_sdk_turn(
+        agent,
+        user_message="hello",
+        original_user_message="hello",
+        messages=[] if messages is None else messages,
+        effective_task_id="task-1",
+    )
+
+
+def test_projected_assistant_turn_is_flushed_to_the_session_db():
+    agent = MagicMock()
+    projected = [{"role": "assistant", "content": "hi"}]
+
+    _run(agent, projected)
+
+    agent._flush_messages_to_session_db.assert_called_once()
+    flushed = agent._flush_messages_to_session_db.call_args.args[0]
+    assert {"role": "assistant", "content": "hi"} in flushed
+
+
+def test_flush_includes_tool_rows_not_just_the_final_text():
+    agent = MagicMock()
+    projected = [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+    _run(agent, projected)
+
+    flushed = agent._flush_messages_to_session_db.call_args.args[0]
+    assert flushed == projected
+
+
+def test_flush_failure_does_not_break_the_turn():
+    """A broken DB must not cost the user their streamed reply."""
+    agent = MagicMock()
+    agent._flush_messages_to_session_db.side_effect = RuntimeError("db down")
+
+    result = _run(agent, [{"role": "assistant", "content": "hi"}])
+
+    assert result["final_response"] == "hi"
+    assert result["completed"] is True
+
+
+def test_no_flush_when_the_turn_projected_nothing():
+    agent = MagicMock()
+
+    _run(agent, [])
+
+    agent._flush_messages_to_session_db.assert_not_called()
+
+
+def test_agent_persisted_is_reported_so_the_gateway_does_not_double_write():
+    agent = MagicMock()
+
+    result = _run(agent, [{"role": "assistant", "content": "hi"}])
+
+    assert result["agent_persisted"] is True
+
+
+def test_agent_persisted_is_false_without_a_session_db():
+    """No DB on the agent means nothing was persisted, so the gateway must
+    stay the writer rather than silently dropping the turn."""
+    agent = MagicMock()
+    agent._session_db = None
+
+    result = _run(agent, [{"role": "assistant", "content": "hi"}])
+
+    assert result["agent_persisted"] is False
+    agent._flush_messages_to_session_db.assert_not_called()
