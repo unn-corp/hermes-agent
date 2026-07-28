@@ -3386,6 +3386,36 @@ def _restore_agent_model_runtime(agent, snapshot: dict | None) -> None:
         )
 
 
+def _apply_claude_code_account_selection(agent, requested_provider: str) -> None:
+    """Honour the Claude Code SUBSCRIPTION a picker section stands for.
+
+    The model picker renders one section per registered account using
+    synthetic `claude-code:<name>` slugs. Translating only the provider makes
+    "Claude Code (personal)" run on whichever account happened to be active —
+    the section label would be a lie, which is exactly the ambiguity those
+    sections exist to remove.
+
+    Hot-swaps the live agent (same path as /cli-account) so the choice applies
+    to THIS session, matching the composer picker's session-scoped contract.
+    Never raises: the model switch has already succeeded by this point, and an
+    unregistered account must not surface to the user as a failed switch that
+    rolls the picker back.
+    """
+    if agent is None:
+        return
+    try:
+        from hermes_cli.inventory import claude_code_account_from_slug
+
+        account = claude_code_account_from_slug(requested_provider)
+        if not account:
+            return
+        agent.switch_cli_account("claude_code_sdk", account)
+    except Exception:
+        logger.debug(
+            "could not apply claude code account from %r", requested_provider, exc_info=True
+        )
+
+
 def _apply_model_switch(
     sid: str,
     session: dict,
@@ -3484,6 +3514,11 @@ def _apply_model_switch(
     )
     if not result.success:
         raise ValueError(result.error_message or "model switch failed")
+
+    # Picking from a per-subscription section selects that account too.
+    _apply_claude_code_account_selection(
+        agent, getattr(parsed_flags, "explicit_provider", "") or ""
+    )
 
     restore_snapshot = _snapshot_agent_model_runtime(agent) if (one_turn and agent) else None
 
@@ -15113,6 +15148,9 @@ def _(rid, params: dict) -> dict:
             explicit_only=bool(params.get("explicit_only")),
             include_unconfigured=bool(params.get("include_unconfigured")),
             picker_hints=True,
+            # Desktop chat picker — selection routes through
+            # POST /api/model/set, which translates the synthetic slug.
+            claude_code_sections=True,
             canonical_order=True,
             pricing=True,
             capabilities=True,

@@ -1434,6 +1434,43 @@ class MoaConfigPayload(BaseModel):
     profile: Optional[str] = None
 
 
+def _resolve_claude_code_provider_slug(
+    provider: str, config: Optional[Dict[str, Any]] = None
+) -> tuple[str, Optional[tuple[str, str]]]:
+    """Translate a synthetic picker slug into a real provider + account.
+
+    The model picker renders one section per Claude Code subscription using
+    ``claude-code:<name>`` slugs (see inventory.CLAUDE_CODE_ROW_PREFIX). Those
+    are display-only: persisting one as ``model.provider`` would name a
+    provider that does not exist and break model resolution, so every write
+    path resolves it here first.
+
+    Returns ``(real_provider, (account_name, config_dir) | None)``. A real
+    provider slug passes through untouched. An unknown account still degrades
+    to ``anthropic`` — selecting the right provider against the default home
+    beats persisting a slug that resolves to nothing.
+    """
+    from hermes_cli.inventory import claude_code_account_from_slug
+
+    name = claude_code_account_from_slug(provider)
+    if not name:
+        return provider, None
+
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            config = {}
+    accounts = (config or {}).get("cli_accounts")
+    if isinstance(accounts, dict):
+        entry = accounts.get(name)
+        if isinstance(entry, dict) and str(entry.get("provider") or "") == "claude_code_sdk":
+            config_dir = str(entry.get("config_dir") or "").strip()
+            if config_dir:
+                return "anthropic", (name, config_dir)
+    return "anthropic", None
+
+
 def _normalize_main_model_assignment(provider: str, model: str) -> tuple[str, str]:
     """Normalize a main-slot (provider, model) pair before persisting.
 
@@ -6827,6 +6864,10 @@ def get_model_options(
                 explicit_only=bool(explicit_only),
                 include_unconfigured=bool(include_unconfigured),
                 picker_hints=True,
+                # Safe here: this payload feeds the dashboard/desktop pickers,
+                # whose selection goes through POST /api/model/set, which
+                # translates the synthetic slug back to a real provider.
+                claude_code_sections=True,
                 canonical_order=True,
                 pricing=True,
                 capabilities=True,
@@ -7068,6 +7109,12 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
     base_url = (body.base_url or "").strip()
     api_key = (body.api_key or "").strip()
 
+    # Picking a model from a per-subscription section sends a synthetic
+    # claude-code:<name> slug. Translate before anything downstream reads
+    # `provider` — provider inference, credential lookup and the persisted
+    # value all need the real one.
+    provider, _claude_code_account = _resolve_claude_code_provider_slug(provider)
+
     if scope not in {"main", "auxiliary"}:
         raise HTTPException(status_code=400, detail="scope must be 'main' or 'auxiliary'")
 
@@ -7103,7 +7150,8 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
         def _apply_assignment():
             with _profile_scope(body.profile or profile):
                 return _apply_model_assignment_sync(
-                    scope, provider, model, task, base_url, api_key
+                    scope, provider, model, task, base_url, api_key,
+                    claude_code_account=_claude_code_account,
                 )
 
         return await asyncio.to_thread(_apply_assignment)
@@ -7115,7 +7163,8 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
 
 
 def _apply_model_assignment_sync(
-    scope: str, provider: str, model: str, task: str, base_url: str, api_key: str = ""
+    scope: str, provider: str, model: str, task: str, base_url: str, api_key: str = "",
+    claude_code_account: Optional[tuple[str, str]] = None,
 ):
     """Synchronous body of POST /api/model/set.
 
@@ -7148,6 +7197,20 @@ def _apply_model_assignment_sync(
         ):
             model_cfg["api_key"] = provider_entry["api_key"]
         cfg["model"] = model_cfg
+
+        # Picking from a per-subscription section also selects that
+        # subscription: point CLAUDE_CONFIG_DIR at it and make sure the CLI
+        # runtime is on, or the section heading would claim an account the
+        # turn does not actually use.
+        if claude_code_account is not None:
+            account_name, account_dir = claude_code_account
+            claude_section = cfg.get("claude_code")
+            if not isinstance(claude_section, dict):
+                claude_section = {}
+                cfg["claude_code"] = claude_section
+            claude_section["config_dir"] = account_dir
+            model_cfg["anthropic_runtime"] = "claude_code_sdk"
+            _log.info("model.set selected claude code account %s", account_name)
 
         # When switching the main provider to Nous, mirror the CLI's
         # post-model-selection behaviour (hermes_cli/main.py

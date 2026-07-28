@@ -335,3 +335,35 @@ def test_persistence_failure_does_not_propagate():
     ))  # must not raise
 
     agent.tool_start_callback.assert_called_once()
+
+
+def test_terminal_task_completes_exactly_once():
+    """The SDK emits BOTH TaskUpdatedMessage(status=completed) AND
+    TaskNotificationMessage for the same task — observed live, 1 start vs 2
+    completions. Firing tool_complete_callback twice duplicates the tool card
+    in the UI and double-counts the turn.
+    """
+    agent = _make_agent()
+    bridge = make_claude_code_sdk_event_bridge(agent)
+
+    _send(bridge, TaskStartedMessage(
+        task_id="task-1", description="Investigate", tool_use_id="tu_1",
+    ))
+    _send(bridge, TaskUpdatedMessage(task_id="task-1", status="completed"))
+    _send(bridge, TaskNotificationMessage(
+        task_id="task-1", status="completed", summary="done",
+    ))
+
+    assert agent.tool_start_callback.call_count == 1
+    assert agent.tool_complete_callback.call_count == 1
+
+
+def test_late_notification_after_kill_does_not_re_complete():
+    agent = _make_agent()
+    bridge = make_claude_code_sdk_event_bridge(agent)
+
+    _send(bridge, TaskStartedMessage(task_id="t", description="x", tool_use_id="tu"))
+    _send(bridge, TaskUpdatedMessage(task_id="t", status="killed"))
+    _send(bridge, TaskNotificationMessage(task_id="t", status="failed", summary="late"))
+
+    assert agent.tool_complete_callback.call_count == 1

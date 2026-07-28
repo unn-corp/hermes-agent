@@ -1025,6 +1025,20 @@ def switch_model(
     )
     from hermes_cli.runtime_provider import resolve_runtime_provider
 
+    # Desktop's model picker renders one section per Claude Code subscription
+    # using synthetic `claude-code:<name>` slugs. A switch made WITH a live
+    # session arrives here (gateway config.set -> the /model path) rather than
+    # through /api/model/set, so the slug has to be resolved before
+    # resolve_provider_full() rejects it as unknown. selectModel rolls back on
+    # error, so without this the picker silently snapped back to the previous
+    # model. The account itself rides on claude_code.config_dir; only the
+    # provider identity is translated here.
+    if explicit_provider:
+        from hermes_cli.inventory import claude_code_account_from_slug
+
+        if claude_code_account_from_slug(explicit_provider):
+            explicit_provider = "anthropic"
+
     resolved_alias = ""
     new_model = raw_input.strip()
     target_provider = current_provider
@@ -1445,6 +1459,25 @@ def switch_model(
         api_mode = _mandated_mode
     elif not api_mode:
         api_mode = determine_api_mode(target_provider, base_url)
+
+    # determine_api_mode() resolves purely from (provider, base_url) and knows
+    # nothing about the opt-in CLI runtimes, so a /model switch silently flipped
+    # an Anthropic session off Claude Code and back onto the Messages API —
+    # observed live as a 400 "You're out of extra usage", i.e. it stopped using
+    # the subscription and started billing OAuth extra usage. Re-apply the same
+    # gate agent_init and runtime_provider use so the runtime survives a switch.
+    if str(target_provider or "").strip().lower() == "anthropic":
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.runtime_provider import _maybe_apply_claude_code_sdk_runtime
+
+            api_mode = _maybe_apply_claude_code_sdk_runtime(
+                provider="anthropic",
+                api_mode=api_mode,
+                model_cfg=(load_config() or {}).get("model"),
+            )
+        except Exception:
+            pass  # a config read failure must not block the switch
 
     # --- Normalize model name for target provider ---
     new_model = normalize_model_for_provider(new_model, target_provider)

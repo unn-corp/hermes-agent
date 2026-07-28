@@ -1835,6 +1835,21 @@ def resolve_provider(
     """
     normalized = (requested or "auto").strip().lower()
 
+    # The model picker renders one section per Claude Code subscription using
+    # synthetic `claude-code:<name>` slugs (inventory.CLAUDE_CODE_ROW_PREFIX).
+    # They are display-only and the config-write path translates them, but the
+    # Desktop composer also pins the selected provider in its own client
+    # storage and replays it as a per-session override — which reached agent
+    # init and died with "Unknown provider 'claude-code:work'". Absorbing the
+    # prefix here covers every caller, since all provider strings funnel
+    # through this function. The account itself is applied separately from
+    # claude_code.config_dir; only the provider identity matters here.
+    if normalized.startswith("claude-code:"):
+        if normalized[len("claude-code:"):].strip():
+            return "anthropic"
+        # Bare prefix with no account is malformed — fall through and raise
+        # rather than silently resolving a typo.
+
     # Normalize provider aliases
     _PROVIDER_ALIASES = {
         "glm": "zai", "z-ai": "zai", "z.ai": "zai", "zhipu": "zai",

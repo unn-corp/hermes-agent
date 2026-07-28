@@ -123,6 +123,7 @@ def build_models_payload(
     force_fresh_nous_tier: bool = False,
     refresh: bool = False,
     probe_custom_providers: bool = True,
+    claude_code_sections: bool = False,
     probe_current_custom_provider: bool = False,
     max_models: int | None = None,
 ) -> dict:
@@ -256,11 +257,192 @@ def build_models_payload(
     if capabilities:
         _apply_capabilities(rows)
 
+    current_provider = ctx.current_provider
+    try:
+        from hermes_cli.config import load_config
+
+        live_config = load_config() or {}
+    except Exception:
+        live_config = {}
+
+    if claude_code_sections:
+        _append_claude_code_account_rows(rows, live_config, current_provider)
+    # The picker highlights the active row by matching payload["provider"]
+    # against each row's slug. Once the generic "anthropic" row is replaced by
+    # per-account rows, that match has to move to the synthetic slug or nothing
+    # renders as selected.
+    for row in rows:
+        if row.get("is_current") and claude_code_account_from_slug(row.get("slug")):
+            current_provider = row["slug"]
+            break
+    else:
+        # No per-account section is current — fall back to naming the active
+        # account on the single Anthropic row, so every surface still says
+        # which subscription it will use.
+        _label_anthropic_row_with_claude_account(rows)
+
     return {
         "providers": rows,
         "model": ctx.current_model,
-        "provider": ctx.current_provider,
+        "provider": current_provider,
     }
+
+
+# Synthetic provider slug prefix for per-subscription picker sections. These
+# rows exist ONLY in the picker payload: the write path translates them back to
+# the real "anthropic" provider plus that account's CLAUDE_CONFIG_DIR (see
+# web_server._resolve_claude_code_provider_slug). A synthetic slug must never
+# reach config.yaml — model.provider would then name a provider that does not
+# exist and model resolution would fail outright.
+CLAUDE_CODE_ROW_PREFIX = "claude-code:"
+
+
+def claude_code_account_from_slug(slug: Optional[str]) -> Optional[str]:
+    """Account name behind a synthetic picker slug, or None for a real one."""
+    text = str(slug or "")
+    if not text.startswith(CLAUDE_CODE_ROW_PREFIX):
+        return None
+    # split on the FIRST separator only, so an account name containing a colon
+    # round-trips intact.
+    return text[len(CLAUDE_CODE_ROW_PREFIX):] or None
+
+
+def _claude_code_accounts(config: dict) -> list[tuple[str, str]]:
+    """(name, config_dir) for every registered claude_code_sdk account."""
+    accounts = config.get("cli_accounts") if isinstance(config, dict) else None
+    if not isinstance(accounts, dict):
+        return []
+    out: list[tuple[str, str]] = []
+    for name, entry in accounts.items():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("provider") or "") != "claude_code_sdk":
+            continue
+        config_dir = str(entry.get("config_dir") or "").strip()
+        if config_dir:
+            out.append((str(name), config_dir))
+    return out
+
+
+def _append_claude_code_account_rows(
+    rows: list[dict], config: dict, current_provider: Optional[str]
+) -> None:
+    """Replace the generic Anthropic row with one row per subscription.
+
+    Runs AFTER explicit-only filtering and canonical reordering deliberately:
+    these slugs are not canonical, so passing them through those stages would
+    either drop them or sort them unpredictably.
+
+    The generic row is replaced rather than kept — leaving it would show four
+    sections where one ("Anthropic") silently resolves to whichever account is
+    currently default, which is exactly the ambiguity this removes.
+    """
+    import os
+
+    try:
+        if not isinstance(config, dict):
+            return
+        model_cfg = config.get("model")
+        if not isinstance(model_cfg, dict):
+            return
+        if str(model_cfg.get("anthropic_runtime") or "").strip() != "claude_code_sdk":
+            return
+
+        accounts = _claude_code_accounts(config)
+        if not accounts:
+            return
+
+        index = next(
+            (i for i, r in enumerate(rows) if str(r.get("slug", "")).lower() == "anthropic"),
+            None,
+        )
+        if index is None:
+            return
+
+        template = rows[index]
+        section = config.get("claude_code")
+        active_dir = str((section or {}).get("config_dir") or "").strip() if isinstance(section, dict) else ""
+        active_resolved = os.path.realpath(os.path.expanduser(active_dir)) if active_dir else ""
+        anthropic_is_current = str(current_provider or "").strip().lower() == "anthropic"
+
+        new_rows = []
+        for name, config_dir in accounts:
+            row = dict(template)
+            row["slug"] = f"{CLAUDE_CODE_ROW_PREFIX}{name}"
+            row["name"] = f"Claude Code ({name})"
+            row["is_current"] = bool(
+                anthropic_is_current
+                and active_resolved
+                and os.path.realpath(os.path.expanduser(config_dir)) == active_resolved
+            )
+            new_rows.append(row)
+
+        rows[index:index + 1] = new_rows
+    except Exception:
+        # A picker that renders one merged Anthropic row is far better than one
+        # that fails to render at all.
+        return
+
+
+def _active_claude_code_account_label(config: dict) -> Optional[str]:
+    """Name of the Claude Code account Anthropic models will run against.
+
+    Returns None when the claude_code_sdk runtime is off — Anthropic is then
+    the plain HTTP API and no CLI account is involved, so naming one would be
+    wrong. Otherwise resolves claude_code.config_dir against the registered
+    cli_accounts, falling back to the directory's basename (hand-set dir with
+    no matching entry) or "default" (no dir set, i.e. the CLI's own ~/.claude).
+    """
+    import os
+
+    if not isinstance(config, dict):
+        return None
+    model_cfg = config.get("model")
+    if not isinstance(model_cfg, dict):
+        return None
+    if str(model_cfg.get("anthropic_runtime") or "").strip() != "claude_code_sdk":
+        return None
+
+    section = config.get("claude_code")
+    config_dir = str((section or {}).get("config_dir") or "").strip() if isinstance(section, dict) else ""
+    if not config_dir:
+        return "default"
+
+    resolved = os.path.realpath(os.path.expanduser(config_dir))
+    accounts = config.get("cli_accounts")
+    if isinstance(accounts, dict):
+        for name, entry in accounts.items():
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("provider") or "") != "claude_code_sdk":
+                continue
+            candidate = str(entry.get("config_dir") or "").strip()
+            if candidate and os.path.realpath(os.path.expanduser(candidate)) == resolved:
+                return str(name)
+    return os.path.basename(resolved.rstrip(os.sep)) or None
+
+
+def _label_anthropic_row_with_claude_account(rows: list[dict]) -> None:
+    """Suffix the Anthropic row's display name with the active Claude Code
+    account, so a multi-subscription user can see which one a model will use.
+
+    Display-only: the slug is untouched, so every lookup, save and comparison
+    keyed on it is unaffected.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        label = _active_claude_code_account_label(load_config() or {})
+    except Exception:
+        return
+    if not label:
+        return
+    for row in rows:
+        if str(row.get("slug", "")).strip().lower() == "anthropic":
+            base = str(row.get("name") or "Anthropic")
+            if "Claude Code" not in base:
+                row["name"] = f"{base} — Claude Code ({label})"
+            break
 
 
 def _apply_capabilities(rows: list[dict]) -> None:
