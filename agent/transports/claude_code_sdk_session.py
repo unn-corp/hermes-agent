@@ -61,6 +61,7 @@ class ClaudeCodeSdkTurnSession:
         claude_bin: str = "claude",
         claude_config_dir: Optional[str] = None,
         extra_args: Optional[dict] = None,
+        resume: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         can_use_tool: Optional[Callable[..., Any]] = None,
         client_factory: Optional[Callable[..., ClaudeCodeSdkClient]] = None,
@@ -69,6 +70,12 @@ class ClaudeCodeSdkTurnSession:
         self._claude_bin = claude_bin
         self._claude_config_dir = claude_config_dir
         self._extra_args = extra_args or {}
+        self._resume = resume or None
+        # The CLI's OWN conversation id, learned from its ResultMessage. The
+        # runtime persists it so the next process can resume this exact
+        # conversation instead of starting blank behind a transcript that
+        # looks continuous.
+        self.cli_session_id: Optional[str] = None
         self._on_event = on_event
         self._can_use_tool = can_use_tool
         self._client_factory = client_factory or ClaudeCodeSdkClient
@@ -83,6 +90,7 @@ class ClaudeCodeSdkTurnSession:
             claude_bin=self._claude_bin,
             claude_config_dir=self._claude_config_dir,
             extra_args=self._extra_args,
+            resume=self._resume,
             can_use_tool=self._can_use_tool,
         )
         self._client.start()
@@ -97,6 +105,16 @@ class ClaudeCodeSdkTurnSession:
             except Exception:  # pragma: no cover - best-effort cleanup
                 pass
             self._client = None
+
+    def _note_cli_session_id(self, message: Any) -> None:
+        """Record the CLI's conversation id off a ResultMessage.
+
+        Blank/missing ids are ignored — resume="" is worse than no resume, and
+        a later message must not erase an id an earlier one supplied.
+        """
+        candidate = str(getattr(message, "session_id", "") or "").strip()
+        if candidate:
+            self.cli_session_id = candidate
 
     def request_interrupt(self) -> None:
         """Best-effort interrupt of an in-flight turn. Mirrors
@@ -186,6 +204,7 @@ class ClaudeCodeSdkTurnSession:
                         )
             elif type_name == "ResultMessage":
                 result.result_message = message
+                self._note_cli_session_id(message)
                 result.final_text = "".join(text_parts)
                 if result.final_text:
                     result.projected_messages.append(

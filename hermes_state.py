@@ -153,7 +153,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
 # state_meta key ``fts_storage_version``. The main schema version advances
@@ -1132,6 +1132,13 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     task_json TEXT,
     delivery_claim TEXT,
     delivery_claimed_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS claude_code_sessions (
+    session_id TEXT PRIMARY KEY,
+    cli_session_id TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
 CREATE TABLE IF NOT EXISTS subagent_transcripts (
@@ -4747,6 +4754,45 @@ class SessionDB:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    def set_claude_code_session_id(self, session_id: str, cli_session_id: str) -> None:
+        """Remember the claude CLI's own conversation id for a Hermes session.
+
+        The CLI owns the Claude-side context; storing its id is what lets the
+        next process reconnect with resume=<id> instead of starting a blank
+        conversation behind a transcript that looks continuous.
+
+        A blank id is ignored rather than stored — resume="" would be worse
+        than no resume at all.
+        """
+        cli_session_id = str(cli_session_id or "").strip()
+        if not session_id or not cli_session_id:
+            return
+        now = time.time()
+
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO claude_code_sessions (session_id, cli_session_id, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT (session_id) DO UPDATE SET
+                       cli_session_id = excluded.cli_session_id,
+                       updated_at = excluded.updated_at""",
+                (session_id, cli_session_id, now),
+            )
+
+        self._execute_write(_do)
+
+    def get_claude_code_session_id(self, session_id: str) -> Optional[str]:
+        """The stored claude CLI conversation id, or None if never recorded."""
+        if not session_id:
+            return None
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT cli_session_id FROM claude_code_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+        return (row[0] if row else None) or None
 
     def upsert_subagent_transcript(
         self,

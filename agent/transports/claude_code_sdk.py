@@ -113,6 +113,7 @@ class ClaudeCodeSdkClient:
         cwd: Optional[str] = None,
         env: Optional[dict[str, str]] = None,
         extra_args: Optional[dict[str, Optional[str]]] = None,
+        resume: Optional[str] = None,
         can_use_tool: Optional[Callable[..., Any]] = None,
         client_factory: Optional[Callable[[Any], Any]] = None,
     ) -> None:
@@ -123,6 +124,9 @@ class ClaudeCodeSdkClient:
         # Free-text CLI flags from Settings, already parsed into the SDK's
         # dict[flag, value|None] shape by claude_code_runtime.
         self._extra_args = extra_args or {}
+        # Claude-side conversation to reconnect to, so context survives a
+        # restart (the CLI owns that history, not Hermes).
+        self._resume = resume or None
         self._can_use_tool = can_use_tool
         self._client_factory = client_factory
 
@@ -299,6 +303,7 @@ class ClaudeCodeSdkClient:
                 cli_path=self._claude_bin,
                 env=spawn_env,
                 extra_args=self._extra_args,
+                **({"resume": self._resume} if self._resume else {}),
                 include_partial_messages=True,
                 can_use_tool=self._can_use_tool,
             )
